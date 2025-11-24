@@ -306,6 +306,12 @@ header h1 .optional {
   font-weight: 300;
 }
 
+#iter-number {
+  display: inline-block;
+  width: 80px;
+  text-align: left;
+}
+
 #top-controls .control .select {
   position: relative;
 }
