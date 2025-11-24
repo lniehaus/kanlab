@@ -805,15 +805,6 @@ function drawLinkWithSplineChart(
   let splineX = splinePosition.x;
   let splineY = splinePosition.y;
   
-  // Constrain spline chart position to stay within SVG bounds
-  let minX = padding + SPLINE_CHART_SIZE_X / 2;
-  let maxX = svgWidth - padding - SPLINE_CHART_SIZE_X / 2;
-  let minY = padding + SPLINE_CHART_SIZE_Y / 2;
-  let maxY = svgHeight - padding - SPLINE_CHART_SIZE_Y / 2;
-
-  splineX = Math.max(minX, Math.min(maxX, splineX));
-  splineY = Math.max(minY, Math.min(maxY, splineY));
-  
   // Create spline chart div
   let splineDiv = d3.select("#network").append("div")
     .attr("class", "spline-chart")
@@ -821,7 +812,7 @@ function drawLinkWithSplineChart(
     .style({
       position: "absolute",
       left: `${splineX - SPLINE_CHART_SIZE_X / 2 + 1}px`,
-      top: `${splineY - SPLINE_CHART_SIZE_Y / 2}px`,
+      top: `${splineY - SPLINE_CHART_SIZE_Y / 2 + 3}px`,
       width: `${SPLINE_CHART_SIZE_X}px`,
       height: `${SPLINE_CHART_SIZE_Y}px`,
       "z-index": "10",

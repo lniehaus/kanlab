@@ -281,14 +281,9 @@ export class NetworkLayoutManager {
       let splineX = (sourceCoord.cx + destCoord.cx) / 2;
 
       // Y position: aligned with grid system
-      let gridY = this.nodeIndexScale(index) + this.rectSize / 2;
+      let splineY = this.nodeIndexScale(index) + this.rectSize / 2;
 
-      // Constrain within SVG bounds
-      let minY = this.padding + this.splineChartHeight / 2;
-      let maxY = this.svgHeight - this.padding - this.splineChartHeight / 2;
-      let splineY = Math.max(minY, Math.min(maxY, gridY));
-
-      // Constrain X as well
+      // Constrain X within SVG bounds
       let minX = this.padding + this.splineChartWidth / 2;
       let maxX = this.svgWidth - this.padding - this.splineChartWidth / 2;
       splineX = Math.max(minX, Math.min(maxX, splineX));
