@@ -537,7 +537,7 @@ function updateWeightsUI(network: kan.KANNode[][], container) {
 }
 
 function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
-    container, node?: kan.KANNode) {
+    container, node?: kan.KANNode, isOutput: boolean = false) {
   let x = cx - RECT_SIZE / 2;
   let y = cy - RECT_SIZE / 2;
 
@@ -601,7 +601,8 @@ function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
     .style({
       position: "absolute",
       left: `${x + 3}px`,
-      top: `${y + 3}px`
+      top: `${y + 3}px`,
+      display: isOutput ? "none" : null
     })
     .on("mouseenter", function() {
       selectedNodeId = nodeId;
@@ -676,104 +677,101 @@ function drawNetwork(network: kan.KANNode[][]): void {
   // Update layout manager with final height
   layoutManager.updateDimensions(width, maxY);
 
-  // Map of all node coordinates.
-  let node2coord: {[id: string]: {cx: number, cy: number}} = {};
+  // Get complete layout from layout manager
+  const layout = layoutManager.getCompleteNetworkLayout(network, nodeIds);
+  const { layers, node2coord, edgesByLayer } = layout;
+
   let container = svg.append("g")
     .classed("core", true)
     .attr("transform", `translate(${padding},${padding})`);
-  // Draw the network layer by layer.
-  let numLayers = network.length;
-  let featureWidth = 118;
-  let layerScale = d3.scale.ordinal<number, number>()
-      .domain(d3.range(1, numLayers - 1))
-      .rangePoints([featureWidth, width - RECT_SIZE], 0.7);
 
+  let numLayers = network.length;
   let calloutThumb = d3.select(".callout.thumbnail").style("display", "none");
   let calloutWeights = d3.select(".callout.weights").style("display", "none");
   let idWithCallout = null;
   let targetIdWithCallout = null;
 
-  // Draw the input layer separately.
-  let cx = RECT_SIZE / 2 + 50;
+  // Draw all layers using layout manager data
+  layers.forEach((layer, layerIdx) => {
+    const isInputLayer = layerIdx === 0;
+    const isOutputLayer = layerIdx === numLayers - 1;
+    const isHiddenLayer = !isInputLayer && !isOutputLayer;
 
-  nodeIds.forEach((nodeId, i) => {
-    let pos = layoutManager.getNodePosition(i, cx);
-    node2coord[nodeId] = pos;
-    drawNode(pos.cx, pos.cy, nodeId, true, container);
-  });
-
-  // Draw the intermediate layers.
-  for (let layerIdx = 1; layerIdx < numLayers - 1; layerIdx++) {
-    let numNodes = network[layerIdx].length;
-    let cx = layerScale(layerIdx) + RECT_SIZE / 2;
-    addPlusMinusControl(layerScale(layerIdx), layerIdx);
-    for (let i = 0; i < numNodes; i++) {
-      let node = network[layerIdx][i];
-      let pos = layoutManager.getNodePosition(i, cx);
-      node2coord[node.id] = pos;
-      drawNode(pos.cx, pos.cy, node.id, false, container, node);
-
-      // Show callout to thumbnails.
-      let numNodes = network[layerIdx].length;
-      let nextNumNodes = network[layerIdx + 1].length;
-      if (idWithCallout == null &&
-          i === numNodes - 1 &&
-          nextNumNodes <= numNodes) {
-        calloutThumb.style({
-          display: null,
-          top: `${20 + 3 + pos.cy}px`,
-          left: `${cx}px`
-        });
-        idWithCallout = node.id;
-      }
+    // Add plus/minus controls for hidden layers
+    if (isHiddenLayer) {
+      const layerX = layoutManager.calculateLayerX(layerIdx, numLayers);
+      addPlusMinusControl(layerX - RECT_SIZE / 2, layerIdx);
     }
-  }
 
-  // Draw the output node separately.
-  cx = width + RECT_SIZE / 2;
-  let node = network[numLayers - 1][0];
-  let pos = layoutManager.getNodePosition(0, cx);
-  node2coord[node.id] = pos;
+    // Draw nodes for this layer
+    layer.nodePositions.forEach((pos, nodeIdx) => {
+      let nodeId: string;
+      let node: kan.KANNode | undefined;
 
-  // Calculate global spline chart positions for each layer
-  for (let layerIdx = 1; layerIdx < numLayers; layerIdx++) {
-    let splinePositions = layoutManager.calculateSplinePositions(network, layerIdx, node2coord, nodeIds);
-    
-    // Draw all edges with spline charts for this layer
-    let currentLayer = network[layerIdx];
-    for (let nodeIdx = 0; nodeIdx < currentLayer.length; nodeIdx++) {
-      let node = currentLayer[nodeIdx];
-      
-      for (let edgeIdx = 0; edgeIdx < node.inputEdges.length; edgeIdx++) {
-        let edge = node.inputEdges[edgeIdx];
-        let edgeKey = `${edge.sourceNode.id}-${edge.destNode.id}`;
-        let splinePosition = splinePositions[edgeKey];
-        
-        drawLinkWithSplineChart(edge, node2coord, network, container, 
-                              edgeIdx === 0, edgeIdx, node.inputEdges.length, 
-                              splinePosition);
-        
-        // Show callout to weights for the last edge of the last node in certain conditions
-        if (targetIdWithCallout == null &&
-            nodeIdx === currentLayer.length - 1 &&
-            edgeIdx === node.inputEdges.length - 1) {
-          let prevLayer = network[layerIdx - 1];
-          let lastNodePrevLayer = prevLayer[prevLayer.length - 1];
-          if (edge.sourceNode.id === lastNodePrevLayer.id &&
-              (edge.sourceNode.id !== idWithCallout || numLayers <= 5) &&
-              edge.destNode.id !== idWithCallout &&
-              prevLayer.length >= currentLayer.length) {
-            // Position callout at the spline chart location
-            calloutWeights.style({
-              display: null,
-              top: `${splinePosition.y + SPLINE_CHART_SIZE_Y/2 + 5}px`,
-              left: `${splinePosition.x + 3}px`
-            });
-            targetIdWithCallout = edge.destNode.id;
-          }
+      if (isInputLayer) {
+        nodeId = nodeIds[nodeIdx];
+      } else {
+        node = network[layerIdx][nodeIdx];
+        nodeId = node.id;
+      }
+
+      drawNode(pos.cx, pos.cy, nodeId, isInputLayer, container, node, isOutputLayer);
+
+      // Show callout to thumbnails for hidden layers
+      if (isHiddenLayer && node) {
+        const numNodes = network[layerIdx].length;
+        const nextNumNodes = network[layerIdx + 1].length;
+        if (idWithCallout == null &&
+            nodeIdx === numNodes - 1 &&
+            nextNumNodes <= numNodes) {
+          calloutThumb.style({
+            display: null,
+            top: `${20 + padding + pos.cy}px`,
+            left: `${layer.cx}px`
+          });
+          idWithCallout = node.id;
         }
       }
-    }
+    });
+  });
+
+  // Draw all edges with spline charts using layout manager data
+  for (let layerIdx = 1; layerIdx < numLayers; layerIdx++) {
+    const layerEdges = edgesByLayer[layerIdx];
+    const currentLayer = network[layerIdx];
+    
+    layerEdges.forEach((edgeLayout, globalEdgeIdx) => {
+      const { edge, splinePosition, linkPath, edgeIndex, totalEdgesForNode } = edgeLayout;
+      
+      drawLinkWithSplineChart(
+        edge,
+        node2coord,
+        network,
+        container,
+        edgeIndex === 0,
+        edgeIndex,
+        totalEdgesForNode,
+        splinePosition,
+        linkPath
+      );
+
+      // Show callout to weights for appropriate edges
+      if (targetIdWithCallout == null && globalEdgeIdx === layerEdges.length - 1) {
+        const prevLayer = network[layerIdx - 1];
+        const lastNodePrevLayer = prevLayer[prevLayer.length - 1];
+        if (edge.sourceNode.id === lastNodePrevLayer.id &&
+            (edge.sourceNode.id !== idWithCallout || numLayers <= 5) &&
+            edge.destNode.id !== idWithCallout &&
+            prevLayer.length >= currentLayer.length) {
+          calloutWeights.style({
+            display: null,
+            top: `${splinePosition.y + SPLINE_CHART_SIZE_Y/2 + 5}px`,
+            left: `${splinePosition.x + 3}px`
+          });
+          targetIdWithCallout = edge.destNode.id;
+        }
+      }
+    });
   }
 
 
@@ -790,7 +788,8 @@ function drawLinkWithSplineChart(
     edge: kan.KANEdge, node2coord: {[id: string]: {cx: number, cy: number}},
     network: kan.KANNode[][], container,
     isFirst: boolean, index: number, length: number, 
-    splinePosition: {x: number, y: number}) {
+    splinePosition: {x: number, y: number},
+    linkPath?: {sourceToSpline: any, splineToTarget: any}) {
   
   let source = node2coord[edge.sourceNode.id];
   let dest = node2coord[edge.destNode.id];
@@ -860,16 +859,26 @@ function drawLinkWithSplineChart(
 
   // Draw first link: source node to spline chart
   let line1 = container.insert("path", ":first-child");
-  let datum1 = {
-    source: {
-      y: source.cx + RECT_SIZE / 2 + 2,
-      x: source.cy
-    },
-    target: {
-      y: splineX - SPLINE_CHART_SIZE_X / 2,
-      x: splineY
-    }
-  };
+  let datum1;
+  if (linkPath) {
+    // Use pre-calculated path from layout manager
+    datum1 = {
+      source: { y: linkPath.sourceToSpline.source.y, x: linkPath.sourceToSpline.source.x },
+      target: { y: linkPath.sourceToSpline.target.y, x: linkPath.sourceToSpline.target.x }
+    };
+  } else {
+    // Fallback to manual calculation
+    datum1 = {
+      source: {
+        y: source.cx + RECT_SIZE / 2 + 2,
+        x: source.cy
+      },
+      target: {
+        y: splineX - SPLINE_CHART_SIZE_X / 2,
+        x: splineY
+      }
+    };
+  }
   let diagonal = d3.svg.diagonal().projection(d => [d.y, d.x]);
   line1.attr({
     "marker-start": "url(#markerArrow)",
@@ -880,16 +889,26 @@ function drawLinkWithSplineChart(
 
   // Draw second link: spline chart to destination node
   let line2 = container.insert("path", ":first-child");
-  let datum2 = {
-    source: {
-      y: splineX + SPLINE_CHART_SIZE_X / 2,
-      x: splineY
-    },
-    target: {
-      y: dest.cx - RECT_SIZE / 2,
-      x: dest.cy + ((index - (length - 1) / 2) / length) * 12
-    }
-  };
+  let datum2;
+  if (linkPath) {
+    // Use pre-calculated path from layout manager
+    datum2 = {
+      source: { y: linkPath.splineToTarget.source.y, x: linkPath.splineToTarget.source.x },
+      target: { y: linkPath.splineToTarget.target.y, x: linkPath.splineToTarget.target.x }
+    };
+  } else {
+    // Fallback to manual calculation
+    datum2 = {
+      source: {
+        y: splineX + SPLINE_CHART_SIZE_X / 2,
+        x: splineY
+      },
+      target: {
+        y: dest.cx - RECT_SIZE / 2,
+        x: dest.cy + ((index - (length - 1) / 2) / length) * 12
+      }
+    };
+  }
   line2.attr({
     "marker-start": "url(#markerArrow)",
     class: "link",
