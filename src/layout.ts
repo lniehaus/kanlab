@@ -419,13 +419,14 @@ export class NetworkLayoutManager {
     network: kan.KANNode[][],
     numInputs: number
   ): number {
-    // Calculate height needed for all edges (spline charts)
-    let totalEdges = 0;
+    // Calculate the maximum number of edges in any single layer
+    let maxEdgesInLayer = 0;
     for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
       let currentLayer = network[layerIdx];
-      totalEdges += currentLayer.reduce((sum, node) => sum + node.inputEdges.length, 0);
+      let edgesInLayer = currentLayer.reduce((sum, node) => sum + node.inputEdges.length, 0);
+      maxEdgesInLayer = Math.max(maxEdgesInLayer, edgesInLayer);
     }
-    let maxYForEdges = this.nodeIndexScale(totalEdges);
+    let maxYForEdges = this.nodeIndexScale(maxEdgesInLayer);
 
     // Calculate height needed for input nodes
     let maxYForInputs = this.nodeIndexScale(numInputs);
