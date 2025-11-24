@@ -382,6 +382,15 @@ export class SplineChart {
       maxY = Math.max(maxY, y);
     }
 
+    // If showing control points, include them in the Y range calculation
+    if (this.settings.showControlPoints) {
+      const controlPoints = this.currentFunction.controlPoints;
+      for (let cp of controlPoints) {
+        minY = Math.min(minY, cp);
+        maxY = Math.max(maxY, cp);
+      }
+    }
+
     // Add some padding
     const padding = Math.max(0.5, (maxY - minY) * 0.1);
     minY -= padding;
