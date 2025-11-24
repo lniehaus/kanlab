@@ -26,6 +26,7 @@ import {
 } from "./state";
 import {Example2D, shuffle} from "./dataset";
 import {AppendingLineChart} from "./linechart";
+import {NetworkLayoutManager} from "./layout";
 import * as d3 from 'd3';
 
 let mainWidth;
@@ -52,6 +53,7 @@ const NUM_SAMPLES_REGRESS = 1200;
 const DENSITY = 100;
 const SPLINE_CHART_SIZE_X = 30;
 const SPLINE_CHART_SIZE_Y = 30;
+const NODE_SPACING = 25;
 
 // Helper: populate numControlPoints options based on degree
 function updateNumControlPointsOptionsForDegree(degreeVal: number, currentNumControlPoints?: number) {
@@ -226,6 +228,8 @@ let edgeSplineCharts: {[edgeId: string]: SplineChart} = {};
 let hoverCardSplineChart: SplineChart = null;
 // Current edge being displayed in hover card
 let currentHoverCardEdge: kan.KANEdge = null;
+// Layout manager for coordinating positions
+let layoutManager: NetworkLayoutManager = null;
 
 function makeGUI() {
   d3.select("#reset-button").on("click", () => {
@@ -631,18 +635,6 @@ function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
 
 }
 
-function getMaxLearnableFunctions(network: kan.KANNode[][]): number {
-  let maxSum = 0;
-  for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
-    let currentLayer = network[layerIdx];
-    let sum = currentLayer.reduce((acc, node) => acc + node.inputEdges.length, 0);
-    if (sum > maxSum) {
-      maxSum = sum;
-    }
-  }
-  return maxSum;
-}
-
 // Draw network
 function drawNetwork(network: kan.KANNode[][]): void {
   let svg = d3.select("#svg");
@@ -663,6 +655,27 @@ function drawNetwork(network: kan.KANNode[][]): void {
   let width = co.offsetLeft - cf.offsetLeft;
   svg.attr("width", width);
 
+  // Get node IDs for input layer
+  let nodeIds = Object.keys(INPUTS);
+  
+  // Initialize layout manager with initial dimensions
+  layoutManager = new NetworkLayoutManager(
+    RECT_SIZE,
+    NODE_SPACING,
+    padding,
+    width,
+    600, // Initial height, will be updated
+    SPLINE_CHART_SIZE_X,
+    SPLINE_CHART_SIZE_Y
+  );
+  
+  // Calculate required height based on network structure
+  let maxY = layoutManager.calculateRequiredHeight(network, nodeIds.length);
+  svg.attr("height", maxY);
+  
+  // Update layout manager with final height
+  layoutManager.updateDimensions(width, maxY);
+
   // Map of all node coordinates.
   let node2coord: {[id: string]: {cx: number, cy: number}} = {};
   let container = svg.append("g")
@@ -674,22 +687,6 @@ function drawNetwork(network: kan.KANNode[][]): void {
   let layerScale = d3.scale.ordinal<number, number>()
       .domain(d3.range(1, numLayers - 1))
       .rangePoints([featureWidth, width - RECT_SIZE], 0.7);
-  let nodeIndexScale = (nodeIndex: number) => nodeIndex * (RECT_SIZE + 25);
-  
-  // Calculate maxY before drawing anything
-  let nodeIds = Object.keys(INPUTS);
-  let maxLearnableFunctions = getMaxLearnableFunctions(network);
-  let maxY = nodeIndexScale(maxLearnableFunctions);
-
-  // Also consider the size of intermediate layers
-  for (let layerIdx = 1; layerIdx < numLayers - 1; layerIdx++) {
-    let numNodes = network[layerIdx].length;
-    maxY = Math.max(maxY, nodeIndexScale(numNodes));
-  }
-  
-  maxY = Math.max(maxY, 400);
-  // Set SVG height early based on calculated maxY
-  svg.attr("height", maxY);
 
   let calloutThumb = d3.select(".callout.thumbnail").style("display", "none");
   let calloutWeights = d3.select(".callout.weights").style("display", "none");
@@ -700,9 +697,9 @@ function drawNetwork(network: kan.KANNode[][]): void {
   let cx = RECT_SIZE / 2 + 50;
 
   nodeIds.forEach((nodeId, i) => {
-    let cy = nodeIndexScale(i) + RECT_SIZE / 2;
-    node2coord[nodeId] = {cx, cy};
-    drawNode(cx, cy, nodeId, true, container);
+    let pos = layoutManager.getNodePosition(i, cx);
+    node2coord[nodeId] = pos;
+    drawNode(pos.cx, pos.cy, nodeId, true, container);
   });
 
   // Draw the intermediate layers.
@@ -712,9 +709,9 @@ function drawNetwork(network: kan.KANNode[][]): void {
     addPlusMinusControl(layerScale(layerIdx), layerIdx);
     for (let i = 0; i < numNodes; i++) {
       let node = network[layerIdx][i];
-      let cy = nodeIndexScale(i) + RECT_SIZE / 2;
-      node2coord[node.id] = {cx, cy};
-      drawNode(cx, cy, node.id, false, container, node);
+      let pos = layoutManager.getNodePosition(i, cx);
+      node2coord[node.id] = pos;
+      drawNode(pos.cx, pos.cy, node.id, false, container, node);
 
       // Show callout to thumbnails.
       let numNodes = network[layerIdx].length;
@@ -724,7 +721,7 @@ function drawNetwork(network: kan.KANNode[][]): void {
           nextNumNodes <= numNodes) {
         calloutThumb.style({
           display: null,
-          top: `${20 + 3 + cy}px`,
+          top: `${20 + 3 + pos.cy}px`,
           left: `${cx}px`
         });
         idWithCallout = node.id;
@@ -735,12 +732,12 @@ function drawNetwork(network: kan.KANNode[][]): void {
   // Draw the output node separately.
   cx = width + RECT_SIZE / 2;
   let node = network[numLayers - 1][0];
-  let cy = nodeIndexScale(0) + RECT_SIZE / 2;
-  node2coord[node.id] = {cx, cy};
+  let pos = layoutManager.getNodePosition(0, cx);
+  node2coord[node.id] = pos;
 
   // Calculate global spline chart positions for each layer
   for (let layerIdx = 1; layerIdx < numLayers; layerIdx++) {
-    let splinePositions = calculateGlobalSplinePositions(network, layerIdx, node2coord);
+    let splinePositions = layoutManager.calculateSplinePositions(network, layerIdx, node2coord, nodeIds);
     
     // Draw all edges with spline charts for this layer
     let currentLayer = network[layerIdx];
@@ -787,101 +784,6 @@ function drawNetwork(network: kan.KANNode[][]): void {
     getRelativeHeight(d3.select("#network"))
   );
   d3.select(".column.features").style("height", height + "px");
-}
-
-function calculateGlobalSplinePositions(
-  network: kan.KANNode[][], 
-  layerIdx: number, 
-  node2coord: {[id: string]: {cx: number, cy: number}}
-): {[edgeKey: string]: {x: number, y: number}} {
-  
-  // Use the same nodeIndexScale function that positions the heatmaps
-  let nodeIndexScale = (nodeIndex: number) => nodeIndex * (RECT_SIZE + 25);
-  
-  // Get SVG dimensions
-  let svg = d3.select("#svg");
-  let svgHeight = parseInt(svg.attr("height")) || 600; // fallback height
-  let padding = 3;
-
-  // Collect all edges for this layer and sort them by destination node position, then source node position
-  let allEdges: {edge: kan.KANEdge, sourceY: number, destY: number, destNodeIdx: number, sourceNodeIdx: number, edgeKey: string}[] = [];
-  
-  let currentLayer = network[layerIdx];
-  for (let nodeIdx = 0; nodeIdx < currentLayer.length; nodeIdx++) {
-    let node = currentLayer[nodeIdx];
-    for (let edgeIdx = 0; edgeIdx < node.inputEdges.length; edgeIdx++) {
-      let edge = node.inputEdges[edgeIdx];
-      let edgeKey = `${edge.sourceNode.id}-${edge.destNode.id}`;
-      let sourceCoord = node2coord[edge.sourceNode.id];
-      let destCoord = node2coord[edge.destNode.id];
-      
-      // Find source node index for proper alignment
-      let sourceNodeIdx = -1;
-      if (layerIdx === 1) {
-        // For first layer, find index in INPUTS
-        let inputIds = Object.keys(INPUTS);
-        for (let i = 0; i < inputIds.length; i++) {
-          if (inputIds[i] === edge.sourceNode.id) {
-            sourceNodeIdx = i;
-            break;
-          }
-        }
-      } else {
-        // For other layers, find index in previous layer
-        let prevLayer = network[layerIdx - 1];
-        for (let i = 0; i < prevLayer.length; i++) {
-          if (prevLayer[i].id === edge.sourceNode.id) {
-            sourceNodeIdx = i;
-            break;
-          }
-        }
-      }
-      
-      allEdges.push({
-        edge: edge,
-        sourceY: sourceCoord.cy,
-        destY: destCoord.cy,
-        destNodeIdx: nodeIdx,
-        sourceNodeIdx: sourceNodeIdx,
-        edgeKey: edgeKey
-      });
-    }
-  }
-  
-  // Sort edges by destination node index first, then by source node index
-  // This groups edges going to the same destination node together and aligns with grid
-  allEdges.sort((a, b) => {
-    if (a.destNodeIdx !== b.destNodeIdx) {
-      return a.destNodeIdx - b.destNodeIdx;
-    }
-    return a.sourceNodeIdx - b.sourceNodeIdx;
-  });
-  
-  // Assign positions to each edge using the same grid system as heatmaps
-  let positions: {[edgeKey: string]: {x: number, y: number}} = {};
-  
-  allEdges.forEach((edgeInfo, index) => {
-    let sourceCoord = node2coord[edgeInfo.edge.sourceNode.id];
-    let destCoord = node2coord[edgeInfo.edge.destNode.id];
-    
-    let splineX = (sourceCoord.cx + destCoord.cx) / 2;
-    
-    // Align spline charts with the grid system used for heatmaps
-    // Position each spline chart at a grid position based on its index
-    let gridY = nodeIndexScale(index) + RECT_SIZE / 2;
-    
-    // Ensure the spline chart stays within bounds
-    let minY = padding + SPLINE_CHART_SIZE_Y / 2;
-    let maxY = svgHeight - padding - SPLINE_CHART_SIZE_Y / 2;
-    let splineY = Math.max(minY, Math.min(maxY, gridY));
-    
-    positions[edgeInfo.edgeKey] = {
-      x: splineX,
-      y: splineY
-    };
-  });
-  
-  return positions;
 }
 
 function drawLinkWithSplineChart(
