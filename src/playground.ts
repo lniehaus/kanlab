@@ -50,7 +50,7 @@ const RECT_SIZE = 30;
 const NUM_SAMPLES_CLASSIFY = 500;
 const NUM_SAMPLES_REGRESS = 1200;
 const DENSITY = 100;
-const SPLINE_CHART_SIZE_X = 40;
+const SPLINE_CHART_SIZE_X = 30;
 const SPLINE_CHART_SIZE_Y = 30;
 
 // Helper: populate numControlPoints options based on degree
@@ -1406,7 +1406,7 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
     
     hoverCardSplineChart = new SplineChart(splineContainer, {
       width: 300,
-      height: 200,
+      height: 300,
       title: edgeText,
       showControlPoints: true,
       showOldControlPaths: false,
