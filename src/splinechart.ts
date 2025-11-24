@@ -412,17 +412,26 @@ export class SplineChart {
 
     this.svg.select(".y.axis")
       .transition()
-      .duration(300)
+      .duration(0) // 300
       .call(yAxis);
 
     // Update horizontal grid lines
     if (this.settings.showGrid) {
-      this.svg.selectAll("line.horizontal")
+      // Remove old grid lines and redraw them
+      this.svg.selectAll("line.horizontal").remove();
+      
+      this.svg.select(".grid")
+        .selectAll("line.horizontal")
         .data(this.yScale.ticks(5))
-        .transition()
-        .duration(300)
+        .enter()
+        .append("line")
+        .attr("class", "horizontal")
+        .attr("x1", 0)
+        .attr("x2", this.width)
         .attr("y1", (d: number) => this.yScale(d))
-        .attr("y2", (d: number) => this.yScale(d));
+        .attr("y2", (d: number) => this.yScale(d))
+        .style("stroke", "#e0e0e0")
+        .style("stroke-width", 1);
     }
   }
 
