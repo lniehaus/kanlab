@@ -163,7 +163,7 @@ export class NetworkLayoutManager {
       layerIndex: 0
     });
 
-    // Hidden layers and output layer
+    // Hidden layers and output layer - initially positioned using grid
     for (let layerIdx = 1; layerIdx < numLayers; layerIdx++) {
       const layerNodes = network[layerIdx];
       const cx = this.calculateLayerX(layerIdx, numLayers);
@@ -179,6 +179,36 @@ export class NetworkLayoutManager {
         cx: cx,
         nodePositions: nodePositions,
         layerIndex: layerIdx
+      });
+    }
+
+    // Adjust Y positions of hidden layer nodes based on their input spline charts
+    for (let layerIdx = 1; layerIdx < numLayers - 1; layerIdx++) {
+      // Calculate spline positions for this layer
+      const splinePositions = this.calculateSplinePositions(network, layerIdx, node2coord, inputIds);
+      
+      // For each node in the hidden layer, calculate mean Y of input splines
+      const layerNodes = network[layerIdx];
+      layerNodes.forEach((node, nodeIdx) => {
+        const inputSplineYs: number[] = [];
+        
+        // Collect Y positions of all input spline charts
+        node.inputEdges.forEach(edge => {
+          const edgeKey = `${edge.sourceNode.id}-${edge.destNode.id}`;
+          const splinePos = splinePositions[edgeKey];
+          if (splinePos) {
+            inputSplineYs.push(splinePos.y);
+          }
+        });
+        
+        // Calculate mean Y position
+        if (inputSplineYs.length > 0) {
+          const meanY = inputSplineYs.reduce((sum, y) => sum + y, 0) / inputSplineYs.length;
+          
+          // Update node position
+          node2coord[node.id].cy = meanY;
+          layers[layerIdx].nodePositions[nodeIdx].cy = meanY;
+        }
       });
     }
 
