@@ -671,7 +671,7 @@ function drawNetwork(network: kan.KANNode[][]): void {
   );
   
   // Calculate required height based on network structure
-  let maxY = layoutManager.calculateRequiredHeight(network, nodeIds.length);
+  let maxY = layoutManager.calculateRequiredHeight(network, nodeIds.length, nodeIds);
   svg.attr("height", maxY);
   
   // Update layout manager with final height
