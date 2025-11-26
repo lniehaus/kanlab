@@ -782,6 +782,16 @@ function drawNetwork(network: kan.KANNode[][]): void {
     getRelativeHeight(d3.select("#network"))
   );
   d3.select(".column.features").style("height", height + "px");
+
+  // Position the #heatmap div to align with the output layer node
+  const outputNode = kan.getKANOutputNode(network);
+  const outputNodePos = node2coord[outputNode.id];
+  if (outputNodePos) {
+    // Calculate the top position: output node's cy position minus half the heatmap size
+    // The node canvas is positioned at cy - RECT_SIZE/2, so we align the #heatmap with that
+    const heatmapTop = outputNodePos.cy - RECT_SIZE / 2 + padding;
+    d3.select("#heatmap").style("margin-top", `${heatmapTop}px`);
+  }
 }
 
 function drawLinkWithSplineChart(
