@@ -70,6 +70,9 @@ export class SplineChart {
   private onControlPointChange: ((index: number, newValue: number) => void) | null = null;
   private onDragStart: (() => void) | null = null;
   private onDragEnd: (() => void) | null = null;
+  private isDragging: boolean = false;
+  private targetYDomain: [number, number] | null = null;
+  private smoothingTimer: any = null;
 
   constructor(container: any, userSettings?: SplineChartSettings) {
     if (userSettings != null) {
@@ -408,6 +411,13 @@ export class SplineChart {
       maxY = Math.max(maxY, 1.1);
     }
 
+    // If dragging, store target domain and apply smoothing
+    if (this.isDragging) {
+      this.targetYDomain = [minY, maxY];
+      this.smoothYScale();
+      return;
+    }
+
     // Update scale
     this.yScale.domain([minY, maxY]);
 
@@ -424,7 +434,7 @@ export class SplineChart {
 
     this.svg.select(".y.axis")
       .transition()
-      .duration(0) // 300
+      .duration(200)
       .call(yAxis);
 
     // Update horizontal grid lines
@@ -498,6 +508,8 @@ export class SplineChart {
           return { x: this.xScale(d.x), y: this.yScale(d.y) };
         })
         .on("dragstart", () => {
+          // Set dragging flag for smooth Y-axis transitions
+          this.isDragging = true;
           // Notify that dragging has started
           if (this.onDragStart) {
             this.onDragStart();
@@ -527,6 +539,27 @@ export class SplineChart {
           }
         })
         .on("dragend", () => {
+          // Clear dragging flag and ensure final update
+          this.isDragging = false;
+          if (this.smoothingTimer) {
+            clearTimeout(this.smoothingTimer);
+            this.smoothingTimer = null;
+          }
+          // Apply final target domain if it exists
+          if (this.targetYDomain) {
+            this.yScale.domain(this.targetYDomain);
+            this.targetYDomain = null;
+            // Update axis with the final domain
+            let yAxis = d3.svg.axis()
+              .scale(this.yScale)
+              .orient("left");
+            if (this.settings.showYAxisValues) {
+              yAxis.ticks(5);
+            } else {
+              yAxis.ticks(0);
+            }
+            this.svg.select(".y.axis").call(yAxis);
+          }
           // Notify that dragging has ended
           if (this.onDragEnd) {
             this.onDragEnd();
@@ -633,6 +666,73 @@ export class SplineChart {
     this.svg.selectAll(".control-polygon").remove();
     this.svg.selectAll(".knot-line").remove();
     this.currentFunction = null;
+  }
+
+  /**
+   * Smoothly interpolate Y-axis scale towards target domain
+   */
+  private smoothYScale(): void {
+    if (!this.targetYDomain) return;
+
+    const currentDomain = this.yScale.domain();
+    const [targetMin, targetMax] = this.targetYDomain;
+    const [currentMin, currentMax] = currentDomain;
+
+    // Interpolation factor (0.15 = 15% of the way to target per frame)
+    const alpha = 0.15;
+
+    // Calculate new domain
+    const newMin = currentMin + (targetMin - currentMin) * alpha;
+    const newMax = currentMax + (targetMax - currentMax) * alpha;
+
+    // Check if we're close enough to target (within 0.01)
+    const isClose = Math.abs(newMin - targetMin) < 0.01 && Math.abs(newMax - targetMax) < 0.01;
+
+    if (isClose) {
+      // Snap to target
+      this.yScale.domain([targetMin, targetMax]);
+    } else {
+      // Apply interpolated domain
+      this.yScale.domain([newMin, newMax]);
+
+      // Schedule next smoothing step
+      if (this.smoothingTimer) {
+        clearTimeout(this.smoothingTimer);
+      }
+      this.smoothingTimer = setTimeout(() => this.smoothYScale(), 16); // ~60fps
+    }
+
+    // Update Y axis without transition (we're handling the smoothing manually)
+    let yAxis = d3.svg.axis()
+      .scale(this.yScale)
+      .orient("left");
+
+    if (this.settings.showYAxisValues) {
+      yAxis.ticks(5);
+    } else {
+      yAxis.ticks(0);
+    }
+
+    this.svg.select(".y.axis")
+      .call(yAxis);
+
+    // Update horizontal grid lines if shown
+    if (this.settings.showGrid) {
+      this.svg.selectAll("line.horizontal").remove();
+      
+      this.svg.select(".grid")
+        .selectAll("line.horizontal")
+        .data(this.yScale.ticks(5))
+        .enter()
+        .append("line")
+        .attr("class", "horizontal")
+        .attr("x1", 0)
+        .attr("x2", this.width)
+        .attr("y1", (d: number) => this.yScale(d))
+        .attr("y2", (d: number) => this.yScale(d))
+        .style("stroke", "#e0e0e0")
+        .style("stroke-width", 1);
+    }
   }
 
   /**
