@@ -402,6 +402,12 @@ export class SplineChart {
     minY -= padding;
     maxY += padding;
 
+    // For interactive charts, ensure minimum range of -1.1 to +1.1
+    if (this.settings.interactive) {
+      minY = Math.min(minY, -1.1);
+      maxY = Math.max(maxY, 1.1);
+    }
+
     // Update scale
     this.yScale.domain([minY, maxY]);
 
