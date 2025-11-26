@@ -390,6 +390,22 @@ header h1 .optional {
   display: block;
 }
 
+/* Interactive control points in hover card */
+#hovercard .control-point {
+  cursor: ns-resize;
+  transition: r 0.1s ease, stroke-width 0.1s ease;
+}
+
+#hovercard .control-point:hover {
+  r: 8;
+  stroke-width: 3;
+}
+
+#hovercard .control-point:active {
+  stroke-width: 3;
+  opacity: 0.8;
+}
+
 /* Main Part*/
 
 #main-part {

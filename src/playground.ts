@@ -230,6 +230,10 @@ let hoverCardSplineChart: SplineChart = null;
 let currentHoverCardEdge: kan.KANEdge = null;
 // Layout manager for coordinating positions
 let layoutManager: NetworkLayoutManager = null;
+// Timeout for hiding hover card with delay
+let hoverCardHideTimeout: number = null;
+// Track if user is currently dragging a control point
+let isDraggingControlPoint: boolean = false;
 
 function makeGUI() {
   d3.select("#reset-button").on("click", () => {
@@ -855,7 +859,14 @@ function drawLinkWithSplineChart(
   splineDiv.on("mouseenter", function() {
     updateHoverCard(HoverType.WEIGHT, edge, [splineX, splineY]);
   }).on("mouseleave", function() {
-    updateHoverCard(null);
+    // Don't hide if user is dragging a control point
+    if (isDraggingControlPoint) {
+      return;
+    }
+    // Delay hiding to allow mouse to move to hovercard
+    hoverCardHideTimeout = setTimeout(() => {
+      updateHoverCard(null);
+    }, 100);
   });
 
   // Draw first link: source node to spline chart
@@ -1259,6 +1270,12 @@ function simulationStarted() {
 function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge, coordinates?: number[]) {
   let hovercard = d3.select("#hovercard");
   
+  // Clear any pending hide timeout
+  if (hoverCardHideTimeout !== null) {
+    clearTimeout(hoverCardHideTimeout);
+    hoverCardHideTimeout = null;
+  }
+  
   if (type == null) {
     // Hide the hover card immediately
     hovercard.style("display", "none");
@@ -1338,7 +1355,39 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
       showYAxisLabels: true,
       showXAxisValues: true,
       showYAxisValues: true,
-      showBorder: false
+      showBorder: false,
+      interactive: true
+    });
+    
+    // Set callback to update the main network visualization when control points change
+    hoverCardSplineChart.setOnControlPointChange((index: number, newValue: number) => {
+      // The control point has already been updated in the LearnableFunction
+      // Update all edge visualizations in the network (colors, widths, spline charts)
+      updateWeightsUI(network, d3.select("g.core"));
+      
+      // Update the decision boundary to reflect the change
+      updateDecisionBoundary(network, false);
+      
+      // Update the main heatmap
+      let selectedId = selectedNodeId != null ?
+          selectedNodeId : kan.getKANOutputNode(network).id;
+      heatMap.updateBackground(boundary[selectedId], state.discretize);
+      
+      // Update all node-specific heatmaps
+      d3.select("#network").selectAll("div.canvas")
+          .each(function(data: {heatmap: HeatMap, id: string}) {
+        data.heatmap.updateBackground(reduceMatrix(boundary[data.id], 10),
+            state.discretize);
+      });
+    });
+    
+    // Set callbacks for drag start and end to prevent hovercard from hiding during drag
+    hoverCardSplineChart.setOnDragStart(() => {
+      isDraggingControlPoint = true;
+    });
+    
+    hoverCardSplineChart.setOnDragEnd(() => {
+      isDraggingControlPoint = false;
     });
     
     // Update with the learnable function and track the current edge
@@ -1405,6 +1454,26 @@ function getRelativeHeight(selection: d3.Selection<any>) {
 drawDatasetThumbnails();
 initTutorial();
 makeGUI();
+
+// Set up hovercard event handlers to keep it visible when mouse is over it
+// and hide it when mouse leaves it
+d3.select("#hovercard")
+  .on("mouseenter", function() {
+    // Cancel any pending hide timeout when mouse enters hovercard
+    if (hoverCardHideTimeout !== null) {
+      clearTimeout(hoverCardHideTimeout);
+      hoverCardHideTimeout = null;
+    }
+  })
+  .on("mouseleave", function() {
+    // Don't hide the hovercard if user is dragging a control point
+    if (isDraggingControlPoint) {
+      return;
+    }
+    // Hide the hovercard when mouse leaves it
+    updateHoverCard(null);
+  });
+
 generateData(true);
 reset(true);
 hideControls();

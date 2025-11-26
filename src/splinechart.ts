@@ -30,6 +30,7 @@ export interface SplineChartSettings {
   title?: string;
   width?: number;
   height?: number;
+  interactive?: boolean;
 }
 
 /**
@@ -49,7 +50,8 @@ export class SplineChart {
     showBorder: false,
     title: "Learnable Function",
     width: 300,
-    height: 200
+    height: 200,
+    interactive: false
   };
   
   protected svg: any;
@@ -64,6 +66,10 @@ export class SplineChart {
   private baseMargin = { top: 2, right: 2, bottom: 2, left: 2 };
   private margin = { top: 2, right: 2, bottom: 2, left: 2 };
   private currentFunction: LearnableFunction | null = null;
+  private dragBehavior: any = null;
+  private onControlPointChange: ((index: number, newValue: number) => void) | null = null;
+  private onDragStart: (() => void) | null = null;
+  private onDragEnd: (() => void) | null = null;
 
   constructor(container: any, userSettings?: SplineChartSettings) {
     if (userSettings != null) {
@@ -479,20 +485,71 @@ export class SplineChart {
       return { x, y, index: i };
     });
 
+    // Create or update drag behavior if interactive
+    if (this.settings.interactive && !this.dragBehavior) {
+      this.dragBehavior = d3.behavior.drag()
+        .origin((d: any) => {
+          return { x: this.xScale(d.x), y: this.yScale(d.y) };
+        })
+        .on("dragstart", () => {
+          // Notify that dragging has started
+          if (this.onDragStart) {
+            this.onDragStart();
+          }
+        })
+        .on("drag", (d: any) => {
+          // Update y position based on drag
+          const event: any = d3.event;
+          const newY = this.yScale.invert(event.y);
+          d.y = newY;
+          
+          // Update the control point in the function
+          if (this.currentFunction) {
+            this.currentFunction.controlPoints[d.index] = newY;
+          }
+          
+          // Update visual position
+          d3.select(event.sourceEvent.target)
+            .attr("cy", event.y);
+          
+          // Redraw the spline curve and control polygon
+          this.redrawCurve();
+          
+          // Notify callback if set
+          if (this.onControlPointChange) {
+            this.onControlPointChange(d.index, newY);
+          }
+        })
+        .on("dragend", () => {
+          // Notify that dragging has ended
+          if (this.onDragEnd) {
+            this.onDragEnd();
+          }
+        });
+    }
+
     // Draw control points
-    this.svg.selectAll(".control-point")
+    const points = this.svg.selectAll(".control-point")
       .data(controlPointData)
       .enter()
       .append("circle")
       .attr("class", "control-point")
       .attr("cx", (d: any) => this.xScale(d.x))
       .attr("cy", (d: any) => this.yScale(d.y))
-      .attr("r", 4)
-      .style("fill", "#E67E22")
+      .attr("r", this.settings.interactive ? 6 : 4)
+      .style("fill", this.settings.interactive ? "#E67E22" : "#E67E22")
       .style("stroke", "#D35400")
       .style("stroke-width", 2)
-      .append("title")
-      .text((d: any) => `Control Point ${d.index}\nPosition: (${d.x.toFixed(2)}, ${d.y.toFixed(3)})`);
+      .style("cursor", this.settings.interactive ? "ns-resize" : "default");
+
+    // Add drag behavior if interactive
+    if (this.settings.interactive && this.dragBehavior) {
+      points.call(this.dragBehavior);
+    }
+
+    // Add tooltips
+    points.append("title")
+      .text((d: any) => `Control Point ${d.index}\nPosition: (${d.x.toFixed(2)}, ${d.y.toFixed(3)})${this.settings.interactive ? '\nDrag to adjust' : ''}`);
 
     // Draw lines connecting control points
     if (controlPointData.length > 1) {
@@ -570,6 +627,66 @@ export class SplineChart {
     this.svg.selectAll(".control-polygon").remove();
     this.svg.selectAll(".knot-line").remove();
     this.currentFunction = null;
+  }
+
+  /**
+   * Redraw only the spline curve and control polygon (used during drag)
+   */
+  private redrawCurve(): void {
+    if (!this.currentFunction) return;
+
+    // Remove old curve and control polygon
+    this.svg.selectAll(".spline-curve").remove();
+    this.svg.selectAll(".control-polygon").remove();
+
+    // Redraw spline curve
+    this.drawSplineCurve();
+
+    // Redraw control polygon
+    const controlPoints = this.currentFunction.controlPoints;
+    const numPoints = controlPoints.length;
+    const controlPointData = controlPoints.map((y, i) => {
+      const x = -1 + (2 * i) / (numPoints - 1);
+      return { x, y, index: i };
+    });
+
+    if (controlPointData.length > 1) {
+      const controlLine = d3.svg.line()
+        .x((d: any) => this.xScale(d.x))
+        .y((d: any) => this.yScale(d.y))
+        .interpolate("linear");
+
+      this.svg.append("path")
+        .datum(controlPointData)
+        .attr("class", "control-polygon")
+        .attr("d", controlLine)
+        .style("fill", "none")
+        .style("stroke", "#E67E22")
+        .style("stroke-width", 1)
+        .style("stroke-dasharray", "5,5")
+        .style("opacity", 0.5);
+    }
+  }
+
+  /**
+   * Set callback for control point changes
+   */
+  setOnControlPointChange(callback: (index: number, newValue: number) => void): void {
+    this.onControlPointChange = callback;
+  }
+
+  /**
+   * Set callback for drag start
+   */
+  setOnDragStart(callback: () => void): void {
+    this.onDragStart = callback;
+  }
+
+  /**
+   * Set callback for drag end
+   */
+  setOnDragEnd(callback: () => void): void {
+    this.onDragEnd = callback;
   }
 
   /**
