@@ -120,22 +120,58 @@ export class NetworkLayoutManager {
   }
 
   /**
+   * Calculate the total number of columns in the network visualization
+   * Columns alternate: heatmap -> spline -> heatmap -> spline -> ... -> heatmap
+   * For N layers: 1 input + (N-1) hidden/output = N heatmap columns
+   *               N-1 spline columns between them
+   *               Total = N + (N-1) = 2N - 1 columns
+   */
+  private calculateTotalColumns(numLayers: number): number {
+    return 2 * numLayers - 1;
+  }
+
+  /**
+   * Calculate X coordinate for a specific column index with equal spacing
+   * Column indices: 0 = input heatmaps, 1 = first splines, 2 = first hidden heatmaps, etc.
+   */
+  private calculateColumnX(columnIdx: number, totalColumns: number): number {
+    const startX = this.rectSize / 2 + 50; // Starting position for input layer
+    const endX = this.svgWidth + this.rectSize / 2; // Ending position for output layer
+    const availableWidth = endX - startX;
+    const columnSpacing = availableWidth / (totalColumns - 1);
+    
+    return startX + (columnIdx * columnSpacing);
+  }
+
+  /**
+   * Map layer index to column index
+   * Layer 0 -> Column 0 (input heatmaps)
+   * Layer 1 -> Column 2 (first hidden layer heatmaps, after first spline column)
+   * Layer 2 -> Column 4 (second hidden layer heatmaps, after second spline column)
+   * etc.
+   */
+  private layerToColumnIndex(layerIdx: number): number {
+    return layerIdx * 2;
+  }
+
+  /**
+   * Calculate column index for spline charts between two layers
+   * Splines between layer 0 and 1 -> Column 1
+   * Splines between layer 1 and 2 -> Column 3
+   * etc.
+   */
+  private splineColumnIndex(destLayerIdx: number): number {
+    return destLayerIdx * 2 - 1;
+  }
+
+  /**
    * Calculate X coordinate for a layer in the network
+   * Uses column-based positioning for equal spacing
    */
   calculateLayerX(layerIdx: number, numLayers: number): number {
-    if (layerIdx === 0) {
-      // Input layer
-      return this.rectSize / 2 + 50;
-    } else if (layerIdx === numLayers - 1) {
-      // Output layer
-      return this.svgWidth + this.rectSize / 2;
-    } else {
-      // Hidden layers - distribute evenly between input and output
-      const layerScale = d3.scale.ordinal<number, number>()
-        .domain(d3.range(1, numLayers - 1))
-        .rangePoints([this.featureWidth, this.svgWidth - this.rectSize], 0.7);
-      return layerScale(layerIdx) + this.rectSize / 2;
-    }
+    const totalColumns = this.calculateTotalColumns(numLayers);
+    const columnIdx = this.layerToColumnIndex(layerIdx);
+    return this.calculateColumnX(columnIdx, totalColumns);
   }
 
   /**
@@ -374,20 +410,18 @@ export class NetworkLayoutManager {
       splineOffset = ((maxColumnCount - splineColumnCount) * (this.rectSize + this.spacing)) / 2;
     }
 
-    sortedEdges.forEach((edgeInfo, index) => {
-      let sourceCoord = node2coord[edgeInfo.edge.sourceNode.id];
-      let destCoord = node2coord[edgeInfo.edge.destNode.id];
+    // Calculate the number of layers to determine column positioning
+    const numLayers = network.length;
+    const totalColumns = this.calculateTotalColumns(numLayers);
+    const splineColIdx = this.splineColumnIndex(layerIdx);
+    const splineX = this.calculateColumnX(splineColIdx, totalColumns);
 
-      // X position: midpoint between source and destination
-      let splineX = (sourceCoord.cx + destCoord.cx) / 2;
+    sortedEdges.forEach((edgeInfo, index) => {
+      // X position: use dedicated column position for uniform spacing
+      // (no longer calculating midpoint between nodes)
 
       // Y position: aligned with grid system, with offset for centering
       let splineY = this.nodeIndexScale(index) + this.rectSize / 2 + splineOffset;
-
-      // Constrain X within SVG bounds
-      let minX = this.padding + this.splineChartWidth / 2;
-      let maxX = this.svgWidth - this.padding - this.splineChartWidth / 2;
-      splineX = Math.max(minX, Math.min(maxX, splineX));
 
       positions[edgeInfo.edgeKey] = {
         x: splineX,
