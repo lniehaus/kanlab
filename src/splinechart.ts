@@ -27,6 +27,9 @@ export interface SplineChartSettings {
   showXAxisValues?: boolean;
   showYAxisValues?: boolean;
   showBorder?: boolean;
+  showActivationHistogram?: boolean;
+  histogramOpacity?: number;
+  histogramColor?: string;
   title?: string;
   width?: number;
   height?: number;
@@ -48,6 +51,9 @@ export class SplineChart {
     showXAxisValues: false,
     showYAxisValues: false,
     showBorder: false,
+    showActivationHistogram: false,
+    histogramOpacity: 0.3,
+    histogramColor: "#4A90E2",
     title: "Learnable Function",
     width: 300,
     height: 200,
@@ -346,7 +352,7 @@ export class SplineChart {
   /**
    * Update the chart with a new learnable function
    */
-  updateFunction(learnableFunction: LearnableFunction): void {
+  updateFunction(learnableFunction: LearnableFunction, histogramData?: number[]): void {
     this.currentFunction = learnableFunction;
     
     // Update Y scale based on function range
@@ -356,10 +362,16 @@ export class SplineChart {
     this.svg.selectAll(".spline-curve").remove();
     this.svg.selectAll(".control-point").remove();
     this.svg.selectAll(".knot-line").remove();
+    this.svg.selectAll(".activation-histogram").remove();
     
     // Clear old control paths only if showOldControlPaths is false
     if (!this.settings.showOldControlPaths) {
       this.svg.selectAll(".control-polygon").remove();
+    }
+
+    // Draw histogram FIRST (so it's behind the curve)
+    if (this.settings.showActivationHistogram && histogramData && histogramData.length > 0) {
+      this.drawActivationHistogram(histogramData);
     }
 
     // Draw the spline curve
@@ -655,6 +667,35 @@ export class SplineChart {
       .style("opacity", 0.7)
       .append("title")
       .text((d: number) => `Knot at x = ${d.toFixed(3)}`);
+  }
+
+  /**
+   * Draw activation histogram as semi-transparent bars
+   */
+  private drawActivationHistogram(histogramData: number[]): void {
+    if (!histogramData || histogramData.length === 0) return;
+    
+    const numBins = histogramData.length;
+    const binWidth = this.width / numBins;
+    const maxHistogramHeight = this.height * 0.25; // Use 25% of chart height
+    
+    // Create histogram group
+    const histogramGroup = this.svg.append("g")
+      .attr("class", "activation-histogram");
+    
+    // Draw bars
+    histogramGroup.selectAll("rect.histogram-bar")
+      .data(histogramData)
+      .enter()
+      .append("rect")
+      .attr("class", "histogram-bar")
+      .attr("x", (d: number, i: number) => i * binWidth)
+      .attr("y", (d: number) => this.height - (d * maxHistogramHeight))
+      .attr("width", Math.max(1, binWidth - 1))
+      .attr("height", (d: number) => d * maxHistogramHeight)
+      .style("fill", this.settings.histogramColor || "#4A90E2")
+      .style("opacity", this.settings.histogramOpacity || 0.3)
+      .style("pointer-events", "none");
   }
 
   /**

@@ -533,7 +533,8 @@ function updateWeightsUI(network: kan.KANNode[][], container) {
         // Update hover card spline chart if it's showing this edge
         if (currentHoverCardEdge && hoverCardSplineChart && 
             currentHoverCardEdge === edge) {
-          hoverCardSplineChart.updateFunction(edge.learnableFunction);
+          const histogramData = edge.getNormalizedHistogram();
+          hoverCardSplineChart.updateFunction(edge.learnableFunction, histogramData);
         }
       }
     }
@@ -1356,6 +1357,9 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
       showXAxisValues: true,
       showYAxisValues: true,
       showBorder: false,
+      showActivationHistogram: true,
+      histogramOpacity: 0.3,
+      histogramColor: "#4A90E2",
       interactive: true
     });
     
@@ -1390,8 +1394,9 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
       isDraggingControlPoint = false;
     });
     
-    // Update with the learnable function and track the current edge
-    hoverCardSplineChart.updateFunction(edge.learnableFunction);
+    // Update with the learnable function and histogram data
+    const histogramData = edge.getNormalizedHistogram();
+    hoverCardSplineChart.updateFunction(edge.learnableFunction, histogramData);
     currentHoverCardEdge = edge;
   }
 }

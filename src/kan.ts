@@ -269,6 +269,11 @@ export class KANEdge {
   lastInput: number = 0;
   accGradients: number[] = [];
   numAccumulatedGrads: number = 0;
+  
+  // Histogram tracking for activation visualization
+  activationHistogram: number[] = [];
+  histogramBins: number = 20;
+  histogramRange: [number, number] = [-1, 1];
 
   constructor(
     source: KANNode,
@@ -291,12 +296,46 @@ export class KANEdge {
     for (let i = 0; i < numControlPoints; i++) {
       this.accGradients.push(0);
     }
+    
+    // Initialize histogram
+    this.resetHistogram();
   }
 
   /** Forward pass through the edge */
   forward(input: number): number {
     this.lastInput = input;
+    this.recordActivation(input);
     return this.learnableFunction.evaluate(input);
+  }
+  
+  /** Record activation for histogram visualization */
+  recordActivation(input: number): void {
+    // Clamp to range
+    input = Math.max(this.histogramRange[0], 
+                     Math.min(this.histogramRange[1], input));
+    
+    // Find bin index
+    const [min, max] = this.histogramRange;
+    const binWidth = (max - min) / this.histogramBins;
+    const binIndex = Math.floor((input - min) / binWidth);
+    const clampedIndex = Math.max(0, Math.min(this.histogramBins - 1, binIndex));
+    
+    // Increment count
+    this.activationHistogram[clampedIndex]++;
+  }
+  
+  /** Get normalized histogram for visualization */
+  getNormalizedHistogram(): number[] {
+    const maxCount = Math.max(...this.activationHistogram, 1);
+    return this.activationHistogram.map(count => count / maxCount);
+  }
+  
+  /** Reset histogram */
+  resetHistogram(): void {
+    this.activationHistogram = [];
+    for (let i = 0; i < this.histogramBins; i++) {
+      this.activationHistogram.push(0);
+    }
   }
 
   /** Accumulate gradients for parameter updates */
@@ -487,6 +526,18 @@ export function updateKANWeights(network: KANNode[][], learningRate: number): vo
 /** Get output node from KAN network */
 export function getKANOutputNode(network: KANNode[][]): KANNode {
   return network[network.length - 1][0];
+}
+
+/** Reset all activation histograms in the network */
+export function resetKANHistograms(network: KANNode[][]): void {
+  for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
+    const currentLayer = network[layerIdx];
+    for (const node of currentLayer) {
+      for (const edge of node.inputEdges) {
+        edge.resetHistogram();
+      }
+    }
+  }
 }
 
 /** Iterate over all nodes in KAN network */
