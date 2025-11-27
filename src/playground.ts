@@ -234,6 +234,12 @@ let layoutManager: NetworkLayoutManager = null;
 let hoverCardHideTimeout: number = null;
 // Track if user is currently dragging a control point
 let isDraggingControlPoint: boolean = false;
+// Track cursor position during interactions
+let lastMousePosition: {x: number, y: number} = {x: 0, y: 0};
+// Timeout for auto-hiding hovercard after inactivity
+let hoverCardInactivityTimeout: number = null;
+// Duration before auto-hide (in ms)
+const HOVERCARD_INACTIVITY_TIMEOUT = 3000;
 
 function makeGUI() {
   d3.select("#reset-button").on("click", () => {
@@ -868,6 +874,10 @@ function drawLinkWithSplineChart(
     hoverCardHideTimeout = setTimeout(() => {
       updateHoverCard(null);
     }, 100);
+  }).on("mousemove", function() {
+    // Track cursor position
+    const event = d3.event as MouseEvent;
+    lastMousePosition = {x: event.pageX, y: event.pageY};
   });
 
   // Draw first link: source node to spline chart
@@ -1268,6 +1278,13 @@ function simulationStarted() {
   parametersChanged = false;
 }
 
+function isCursorOverElement(element: HTMLElement, cursorX: number, cursorY: number): boolean {
+  if (!element) return false;
+  const rect = element.getBoundingClientRect();
+  return cursorX >= rect.left && cursorX <= rect.right &&
+         cursorY >= rect.top && cursorY <= rect.bottom;
+}
+
 function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge, coordinates?: number[]) {
   let hovercard = d3.select("#hovercard");
   
@@ -1275,6 +1292,12 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
   if (hoverCardHideTimeout !== null) {
     clearTimeout(hoverCardHideTimeout);
     hoverCardHideTimeout = null;
+  }
+  
+  // Clear any pending inactivity timeout
+  if (hoverCardInactivityTimeout !== null) {
+    clearTimeout(hoverCardInactivityTimeout);
+    hoverCardInactivityTimeout = null;
   }
   
   if (type == null) {
@@ -1392,6 +1415,29 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
     
     hoverCardSplineChart.setOnDragEnd(() => {
       isDraggingControlPoint = false;
+      
+      // Check if cursor is still over the hovercard after drag ends
+      // If not, hide the hovercard
+      setTimeout(() => {
+        const hovercardElement = document.getElementById('hovercard');
+        if (hovercardElement && hovercardElement.style.display !== 'none') {
+          const isOverHovercard = isCursorOverElement(hovercardElement, lastMousePosition.x, lastMousePosition.y);
+          
+          // Also check if cursor is over any spline chart div
+          let isOverSplineChart = false;
+          d3.selectAll('.spline-chart-div').each(function() {
+            const splineElement = this as HTMLElement;
+            if (isCursorOverElement(splineElement, lastMousePosition.x, lastMousePosition.y)) {
+              isOverSplineChart = true;
+            }
+          });
+          
+          // If cursor is not over hovercard or any spline chart, hide it
+          if (!isOverHovercard && !isOverSplineChart) {
+            updateHoverCard(null);
+          }
+        }
+      }, 50); // Small delay to ensure drag event has fully completed
     });
     
     // Update with the learnable function and histogram data
@@ -1399,6 +1445,11 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
     hoverCardSplineChart.updateFunction(edge.learnableFunction, histogramData);
     currentHoverCardEdge = edge;
   }
+  
+  // Set inactivity timeout to auto-hide hovercard
+  hoverCardInactivityTimeout = setTimeout(() => {
+    updateHoverCard(null);
+  }, HOVERCARD_INACTIVITY_TIMEOUT);
 }
 
 function addPlusMinusControl(x: number, layerIdx: number) {
@@ -1469,6 +1520,26 @@ d3.select("#hovercard")
       clearTimeout(hoverCardHideTimeout);
       hoverCardHideTimeout = null;
     }
+    // Reset inactivity timeout
+    if (hoverCardInactivityTimeout !== null) {
+      clearTimeout(hoverCardInactivityTimeout);
+      hoverCardInactivityTimeout = null;
+    }
+    hoverCardInactivityTimeout = setTimeout(() => {
+      updateHoverCard(null);
+    }, HOVERCARD_INACTIVITY_TIMEOUT);
+  })
+  .on("mousemove", function() {
+    // Track cursor position and reset inactivity timeout
+    const event = d3.event as MouseEvent;
+    lastMousePosition = {x: event.pageX, y: event.pageY};
+    if (hoverCardInactivityTimeout !== null) {
+      clearTimeout(hoverCardInactivityTimeout);
+      hoverCardInactivityTimeout = null;
+    }
+    hoverCardInactivityTimeout = setTimeout(() => {
+      updateHoverCard(null);
+    }, HOVERCARD_INACTIVITY_TIMEOUT);
   })
   .on("mouseleave", function() {
     // Don't hide the hovercard if user is dragging a control point
