@@ -69,7 +69,6 @@ export class LearnableFunction {
     const [min, max] = this.inputRange;
     const numControlPoints = this.gridSize + 1;
     const numKnots = numControlPoints + this.degree + 1;
-    console.log("numControlPoints", numControlPoints, "numKnots", numKnots);
     
     this.knotVector = [];
     
