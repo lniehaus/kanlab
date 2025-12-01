@@ -200,7 +200,7 @@ let heatMap =
         {showAxes: true});
 let linkWidthScale = d3.scale.linear()
   .domain([0, 1])
-  .range([1, 5]) // 0, 10
+  .range([0, 5]) // 0, 10
   .clamp(true);
 let colorScale = d3.scale.linear<string, number>()
                      .domain([-1, 0, 1])
@@ -480,45 +480,25 @@ function makeGUI() {
 }
 
 function updateWeightsUI(network: kan.KANNode[][], container) {
+  // Use fixed boundaries for activation std (reasonable values based on typical activation ranges)
+  const inputStdBoundary = 0.6;  // 0.6 is Typical std for inputs in [-1, 1] range
+  const outputStdBoundary = 0.6; // 0.6 is Typical std for outputs in [-1, 1] range
+  
   for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
     let currentLayer = network[layerIdx];
     
-    // First pass: calculate activation stds for this layer and find the maximum
-    let layerInputStds: {[edgeId: string]: number} = {};
-    let layerOutputStds: {[edgeId: string]: number} = {};
-    let maxInputStd = 0;
-    let maxOutputStd = 0;
-    
+    // Update all the visual elements with absolute activation stds
     for (let i = 0; i < currentLayer.length; i++) {
       let node = currentLayer[i];
       for (let j = 0; j < node.inputEdges.length; j++) {
         let edge = node.inputEdges[j];
+        let edgeId = `${edge.sourceNode.id}-${edge.destNode.id}`;
+        
+        // Use absolute std values clamped to [0, 1] range based on boundaries
         let inputStd = edge.getInputActivationStd();
         let outputStd = edge.getOutputActivationStd();
-        let edgeId = `${edge.sourceNode.id}-${edge.destNode.id}`;
-        layerInputStds[edgeId] = inputStd;
-        layerOutputStds[edgeId] = outputStd;
-        maxInputStd = Math.max(maxInputStd, inputStd);
-        maxOutputStd = Math.max(maxOutputStd, outputStd);
-      }
-    }
-    
-    // Avoid division by zero
-    if (maxInputStd === 0) {
-      maxInputStd = 1;
-    }
-    if (maxOutputStd === 0) {
-      maxOutputStd = 1;
-    }
-    
-    // Second pass: update all the visual elements with normalized activation stds
-    for (let i = 0; i < currentLayer.length; i++) {
-      let node = currentLayer[i];
-      for (let j = 0; j < node.inputEdges.length; j++) {
-        let edge = node.inputEdges[j];
-        let edgeId = `${edge.sourceNode.id}-${edge.destNode.id}`;
-        let normalizedInputStd = layerInputStds[edgeId] / maxInputStd;
-        let normalizedOutputStd = layerOutputStds[edgeId] / maxOutputStd;
+        let normalizedInputStd = Math.min(1, inputStd / inputStdBoundary);
+        let normalizedOutputStd = Math.min(1, outputStd / outputStdBoundary);
         
         // Update the first link (source to spline chart) - use input activation std
         container.select(`#link${edgeId}-part1`)
@@ -1400,13 +1380,14 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
       const outputHistogramData = edge.getNormalizedOutputHistogram();
       hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData);
       
-      // Update link colors/widths for this specific edge
+      // Update link colors/widths for this specific edge using absolute std values
+      const inputStdBoundary = 0.6;  // Typical std for inputs in [-1, 1] range
+      const outputStdBoundary = 0.6; // Typical std for outputs in [-1, 1] range
+      
       const inputStd = edge.getInputActivationStd();
       const outputStd = edge.getOutputActivationStd();
-      const maxInputStd = inputStd || 1;
-      const maxOutputStd = outputStd || 1;
-      const normalizedInputStd = inputStd / maxInputStd;
-      const normalizedOutputStd = outputStd / maxOutputStd;
+      const normalizedInputStd = Math.min(1, inputStd / inputStdBoundary);
+      const normalizedOutputStd = Math.min(1, outputStd / outputStdBoundary);
       
       let svgContainer = d3.select("g.core");
       svgContainer.select(`#link${edgeId}-part1`)
