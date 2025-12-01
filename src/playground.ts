@@ -861,8 +861,19 @@ function drawLinkWithSplineChart(
     edge.isActive = !edge.isActive;
     splineDiv.classed("inactive", !edge.isActive);
     
-    // Reset and repopulate histograms with current network state
-    edge.resetHistogram();
+    // Reset histograms for ALL edges in the network, not just this one
+    // This ensures recalculation from scratch with the new network state
+    for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
+      let currentLayer = network[layerIdx];
+      for (let i = 0; i < currentLayer.length; i++) {
+        let node = currentLayer[i];
+        for (let j = 0; j < node.inputEdges.length; j++) {
+          node.inputEdges[j].resetHistogram();
+        }
+      }
+    }
+    
+    // Repopulate histograms with current network state
     trainData.forEach((point) => {
       let input = constructInput(point.x, point.y);
       kan.kanForwardProp(network, input, true);
