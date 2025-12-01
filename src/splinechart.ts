@@ -30,6 +30,9 @@ export interface SplineChartSettings {
   showActivationHistogram?: boolean;
   histogramOpacity?: number;
   histogramColor?: string;
+  outputHistogramColor?: string;
+  histogramSize?: number;
+  histogramGap?: number;
   title?: string;
   width?: number;
   height?: number;
@@ -54,6 +57,9 @@ export class SplineChart {
     showActivationHistogram: false,
     histogramOpacity: 0.3,
     histogramColor: "#4A90E2",
+    outputHistogramColor: "#4A90E2",
+    histogramSize: 50,
+    histogramGap: 10,
     title: "Learnable Function",
     width: 300,
     height: 200,
@@ -120,9 +126,17 @@ export class SplineChart {
       this.margin.bottom = 30; 
     }
 
-    // Reduce top margin if title exists
+    // Extend top margin for title and histogram
     if (this.settings.title && this.settings.title.trim() !== "") {
-      this.margin.top = 30; // Minimal margin to match bottom when no axes
+      this.margin.top = 30; // Minimal margin when title exists
+    }
+    
+    // Add additional space at top if histogram is shown (Seaborn joint plot style)
+    if (this.settings.showActivationHistogram) {
+      const histogramSize = this.settings.histogramSize || 50;
+      const histogramGap = this.settings.histogramGap || 10;
+      this.margin.top += histogramSize + histogramGap;
+      this.margin.right += histogramSize + histogramGap;
     }
   }
 
@@ -161,10 +175,12 @@ export class SplineChart {
 
     // Add title
     if (this.settings.title) {
+      // Position title above histogram if shown, otherwise just above plot
+      const titleY = this.settings.showActivationHistogram ? -70 : -10;
       this.svg.append("text")
         .attr("class", "spline-title")
         .attr("x", this.width / 2)
-        .attr("y", -10)
+        .attr("y", titleY)
         .attr("text-anchor", "middle")
         .style("font-size", "14px")
         .style("font-weight", "bold")
@@ -208,10 +224,12 @@ export class SplineChart {
 
     // Add title
     if (this.settings.title) {
+      // Position title above histogram if shown, otherwise just above plot
+      const titleY = this.settings.showActivationHistogram ? -70 : -10;
       this.svg.append("text")
         .attr("class", "spline-title")
         .attr("x", this.width / 2)
-        .attr("y", -10)
+        .attr("y", titleY)
         .attr("text-anchor", "middle")
         .style("font-size", "14px")
         .style("font-weight", "bold")
@@ -352,7 +370,7 @@ export class SplineChart {
   /**
    * Update the chart with a new learnable function
    */
-  updateFunction(learnableFunction: LearnableFunction, histogramData?: number[]): void {
+  updateFunction(learnableFunction: LearnableFunction, inputHistogramData?: number[], outputHistogramData?: number[]): void {
     this.currentFunction = learnableFunction;
     
     // Update Y scale based on function range
@@ -363,15 +381,21 @@ export class SplineChart {
     this.svg.selectAll(".control-point").remove();
     this.svg.selectAll(".knot-line").remove();
     this.svg.selectAll(".activation-histogram").remove();
+    this.svg.selectAll(".output-histogram").remove();
     
     // Clear old control paths only if showOldControlPaths is false
     if (!this.settings.showOldControlPaths) {
       this.svg.selectAll(".control-polygon").remove();
     }
 
-    // Draw histogram FIRST (so it's behind the curve)
-    if (this.settings.showActivationHistogram && histogramData && histogramData.length > 0) {
-      this.drawActivationHistogram(histogramData);
+    // Draw histograms FIRST (so they're behind the curve)
+    if (this.settings.showActivationHistogram) {
+      if (inputHistogramData && inputHistogramData.length > 0) {
+        this.drawActivationHistogram(inputHistogramData);
+      }
+      if (outputHistogramData && outputHistogramData.length > 0) {
+        this.drawOutputHistogram(outputHistogramData);
+      }
     }
 
     // Draw the spline curve
@@ -670,30 +694,86 @@ export class SplineChart {
   }
 
   /**
-   * Draw activation histogram as semi-transparent bars
+   * Draw activation histogram as semi-transparent bars above the main plot (Seaborn joint plot style)
    */
   private drawActivationHistogram(histogramData: number[]): void {
     if (!histogramData || histogramData.length === 0) return;
     
     const numBins = histogramData.length;
-    const binWidth = this.width / numBins;
-    const maxHistogramHeight = this.height * 0.25; // Use 25% of chart height
+    const histogramHeight = this.settings.histogramSize || 50;
+    const histogramGap = this.settings.histogramGap || 10;
     
-    // Create histogram group
+    // The histogram bins represent the range [-1, 1] (matching xScale domain)
+    const xMin = -1;
+    const xMax = 1;
+    const binWidth = (xMax - xMin) / numBins;
+    
+    // Create histogram group positioned above the main plot
     const histogramGroup = this.svg.append("g")
-      .attr("class", "activation-histogram");
+      .attr("class", "activation-histogram")
+      .attr("transform", `translate(0, ${-histogramHeight - histogramGap})`);
     
-    // Draw bars
+    // Draw bars (growing upward from bottom) using xScale for positioning
     histogramGroup.selectAll("rect.histogram-bar")
       .data(histogramData)
       .enter()
       .append("rect")
       .attr("class", "histogram-bar")
-      .attr("x", (d: number, i: number) => i * binWidth)
-      .attr("y", (d: number) => this.height - (d * maxHistogramHeight))
-      .attr("width", Math.max(1, binWidth - 1))
-      .attr("height", (d: number) => d * maxHistogramHeight)
+      .attr("x", (d: number, i: number) => {
+        const binStart = xMin + i * binWidth;
+        return this.xScale(binStart);
+      })
+      .attr("y", (d: number) => histogramHeight - (d * histogramHeight)) // Start from bottom of histogram area
+      .attr("width", (d: number, i: number) => {
+        const binStart = xMin + i * binWidth;
+        const binEnd = xMin + (i + 1) * binWidth;
+        return Math.max(1, this.xScale(binEnd) - this.xScale(binStart) - 1);
+      })
+      .attr("height", (d: number) => d * histogramHeight)
       .style("fill", this.settings.histogramColor || "#4A90E2")
+      .style("opacity", this.settings.histogramOpacity || 0.3)
+      .style("pointer-events", "none");
+  }
+
+  /**
+   * Draw output histogram as semi-transparent bars on the right side (Seaborn joint plot style)
+   */
+  private drawOutputHistogram(histogramData: number[]): void {
+    if (!histogramData || histogramData.length === 0) return;
+    
+    const numBins = histogramData.length;
+    const histogramWidth = this.settings.histogramSize || 50;
+    const histogramGap = this.settings.histogramGap || 10;
+    
+    // The histogram bins represent the range [-2, 2] (matching yScale domain)
+    const yMin = -2;
+    const yMax = 2;
+    const binHeight = (yMax - yMin) / numBins;
+    
+    // Create histogram group positioned to the right of the main plot
+    const histogramGroup = this.svg.append("g")
+      .attr("class", "output-histogram")
+      .attr("transform", `translate(${this.width + histogramGap}, 0)`);
+    
+    // Draw bars (growing rightward from left edge) using yScale for positioning
+    histogramGroup.selectAll("rect.output-histogram-bar")
+      .data(histogramData)
+      .enter()
+      .append("rect")
+      .attr("class", "output-histogram-bar")
+      .attr("x", 0) // Start from left edge
+      .attr("y", (d: number, i: number) => {
+        const binStart = yMin + i * binHeight;
+        const binEnd = yMin + (i + 1) * binHeight;
+        return this.yScale(binEnd); // yScale is inverted (higher y values = lower on screen)
+      })
+      .attr("width", (d: number) => d * histogramWidth)
+      .attr("height", (d: number, i: number) => {
+        const binStart = yMin + i * binHeight;
+        const binEnd = yMin + (i + 1) * binHeight;
+        return Math.max(1, Math.abs(this.yScale(binStart) - this.yScale(binEnd)) - 1);
+      })
+      .style("fill", this.settings.outputHistogramColor || "#E24A90")
       .style("opacity", this.settings.histogramOpacity || 0.3)
       .style("pointer-events", "none");
   }
