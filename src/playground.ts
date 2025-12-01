@@ -200,7 +200,7 @@ let heatMap =
         {showAxes: true});
 let linkWidthScale = d3.scale.linear()
   .domain([0, 1])
-  .range([0, 5]) // 0, 10
+  .range([1, 5]) // 0, 10
   .clamp(true);
 let colorScale = d3.scale.linear<string, number>()
                      .domain([-1, 0, 1])
@@ -208,8 +208,8 @@ let colorScale = d3.scale.linear<string, number>()
                      .clamp(true);
 
 let linkColorScale = d3.scale.linear<string, number>()
-                     .domain([-1, 0, 1])
-                     .range(["#ffffff", "#e8eaeb", "#6B6B6B"]) // #1B998B #7D2E68 #5A5A5A
+                     .domain([0, 1])
+                     .range(["#d0d0d0", "#6B6B6B"])
                      .clamp(true);
 
 let iter = 0;
