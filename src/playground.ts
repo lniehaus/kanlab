@@ -973,7 +973,7 @@ function updateDecisionBoundary(network: kan.KANNode[][], firstTime: boolean) {
       let x = xScale(i);
       let y = yScale(j);
       let input = constructInput(x, y);
-      kan.kanForwardProp(network, input);
+      kan.kanForwardProp(network, input, false);
       kan.forEachKANNode(network, true, node => {
         boundary[node.id][i][j] = node.output;
       });
@@ -992,7 +992,7 @@ function getLoss(network: kan.KANNode[][], dataPoints: Example2D[]): number {
   for (let i = 0; i < dataPoints.length; i++) {
     let dataPoint = dataPoints[i];
     let input = constructInput(dataPoint.x, dataPoint.y);
-    let output = kan.kanForwardProp(network, input);
+    let output = kan.kanForwardProp(network, input, false);
     loss += kan.Errors.SQUARE.error(output, dataPoint.label);
   }
   return loss / dataPoints.length;
@@ -1108,6 +1108,13 @@ function reset(onStartup=false) {
   const derivedGridSize = Math.max(1, Math.floor(state.numControlPoints) - 1);
 
   network = kan.buildKANNetwork(shape, constructInputIds(), derivedGridSize, state.degree, state.initNoise);
+  
+  // Populate histograms with initial forward passes using training data
+  trainData.forEach((point) => {
+    let input = constructInput(point.x, point.y);
+    kan.kanForwardProp(network, input, true);
+  });
+  
   lossTrain = getLoss(network, trainData);
   lossTest = getLoss(network, testData);
   drawNetwork(network);
@@ -1375,7 +1382,7 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
       // Run forward passes with training data to repopulate histograms
       trainData.forEach((point) => {
         let input = constructInput(point.x, point.y);
-        kan.kanForwardProp(network, input);
+        kan.kanForwardProp(network, input, true);
       });
       
       // Only update the edge visualization immediately (lightweight)

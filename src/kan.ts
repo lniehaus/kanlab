@@ -311,11 +311,15 @@ export class KANEdge {
   }
 
   /** Forward pass through the edge */
-  forward(input: number): number {
+  forward(input: number, recordHistogram: boolean = true): number {
     this.lastInput = input;
-    this.recordActivation(input);
+    if (recordHistogram) {
+      this.recordActivation(input);
+    }
     const output = this.learnableFunction.evaluate(input);
-    this.recordOutput(output);
+    if (recordHistogram) {
+      this.recordOutput(output);
+    }
     return output;
   }
   
@@ -501,10 +505,10 @@ export class KANNode {
   }
 
   /** Forward pass: sum all edge outputs */
-  forward(): number {
+  forward(recordHistogram: boolean = true): number {
     this.output = 0;
     for (const edge of this.inputEdges) {
-      this.output += edge.forward(edge.sourceNode.output);
+      this.output += edge.forward(edge.sourceNode.output, recordHistogram);
     }
     return this.output;
   }
@@ -571,7 +575,7 @@ export function buildKANNetwork(
 /**
  * Forward propagation through KAN network
  */
-export function kanForwardProp(network: KANNode[][], inputs: number[]): number {
+export function kanForwardProp(network: KANNode[][], inputs: number[], recordHistogram: boolean = true): number {
   const inputLayer = network[0];
   if (inputs.length !== inputLayer.length) {
     throw new Error("Number of inputs must match input layer size");
@@ -586,7 +590,7 @@ export function kanForwardProp(network: KANNode[][], inputs: number[]): number {
   for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
     const currentLayer = network[layerIdx];
     for (const node of currentLayer) {
-      node.forward();
+      node.forward(recordHistogram);
     }
   }
 
