@@ -557,6 +557,12 @@ let symbolicResult: SymbolicDatasetResult | null = null;
 let symbolicPlot: SymbolicPlot | null = null;
 // Layout manager for coordinating network positions
 let layoutManager: NetworkLayoutManager | null = null;
+// Timeout for hiding hover card with delay
+let hoverCardHideTimeout: number | null = null;
+// Track if user is currently dragging a control point
+let isDraggingControlPoint = false;
+// Track cursor position during interactions
+let lastMousePosition = { x: 0, y: 0 };
 
 function makeGUI() {
   d3.select("#reset-button").on("click", () => {
@@ -838,51 +844,44 @@ function makeGUI() {
 }
 
 function updateWeightsUI(network: kan.KANNode[][], container) {
+  // Use fixed boundaries for activation std (reasonable values based on typical activation ranges)
+  const inputStdBoundary = 0.6;  // Typical std for inputs in [-1, 1] range
+  const outputStdBoundary = 0.6; // Typical std for outputs in [-1, 1] range
+
   for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
     let currentLayer = network[layerIdx];
 
-    // First pass: calculate all norms for this layer and find the maximum
-    let layerNorms: { [edgeId: string]: number } = {};
-    let maxNorm = 0;
-
-    for (let i = 0; i < currentLayer.length; i++) {
-      let node = currentLayer[i];
-      for (let j = 0; j < node.inputEdges.length; j++) {
-        let edge = node.inputEdges[j];
-        let normWeight = Math.sqrt(edge.learnableFunction.controlPoints.reduce((sum, coeff) => sum + coeff * coeff, 0));
-        let edgeId = `${edge.sourceNode.id}-${edge.destNode.id}`;
-        layerNorms[edgeId] = normWeight;
-        maxNorm = Math.max(maxNorm, normWeight);
-      }
-    }
-
-    // Avoid division by zero
-    if (maxNorm === 0) {
-      maxNorm = 1;
-    }
-
-    // Second pass: update all the visual elements with normalized weights
     for (let i = 0; i < currentLayer.length; i++) {
       let node = currentLayer[i];
       for (let j = 0; j < node.inputEdges.length; j++) {
         let edge = node.inputEdges[j];
         let edgeId = `${edge.sourceNode.id}-${edge.destNode.id}`;
-        let normalizedWeight = layerNorms[edgeId] / maxNorm;
 
-        // Update the first link (source to spline chart)
+        // Use absolute std values clamped to [0, 1] range based on boundaries
+        let inputStd = edge.getInputActivationStd();
+        let outputStd = edge.getOutputActivationStd();
+        let normalizedInputStd = Math.min(1, inputStd / inputStdBoundary);
+        let normalizedOutputStd = Math.min(1, outputStd / outputStdBoundary);
+
+        // If edge is inactive, make links very faint
+        const opacity = edge.isActive ? 1.0 : 0.2;
+
+        // Update the first link (source to spline chart) - use input activation std
         container.select(`#link${edgeId}-part1`)
           .style({
             "stroke-dashoffset": -iter / 3,
-            "stroke-width": linkWidthScale(normalizedWeight),
-            "stroke": linkColorScale(normalizedWeight)
+            "stroke-width": linkWidthScale(normalizedInputStd),
+            "stroke": linkColorScale(normalizedInputStd),
+            "opacity": opacity
           });
 
-        // Update the second link (spline chart to destination)
+        // Update the second link (spline chart to destination) - use output activation std
         container.select(`#link${edgeId}-part2`)
           .style({
             "stroke-dashoffset": -iter / 3,
-            "stroke-width": linkWidthScale(normalizedWeight),
-            "stroke": linkColorScale(normalizedWeight)
+            "stroke-width": linkWidthScale(normalizedOutputStd),
+            "stroke": linkColorScale(normalizedOutputStd),
+            "opacity": opacity
           });
 
         // Update the spline chart
@@ -893,7 +892,9 @@ function updateWeightsUI(network: kan.KANNode[][], container) {
         // Update hover card spline chart if it's showing this edge
         if (currentHoverCardEdge && hoverCardSplineChart &&
           currentHoverCardEdge === edge) {
-          hoverCardSplineChart.updateFunction(edge.learnableFunction);
+          const inputHistogramData = edge.getNormalizedHistogram();
+          const outputHistogramData = edge.getNormalizedOutputHistogram();
+          hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData);
         }
       }
     }
@@ -1042,7 +1043,7 @@ function drawNetwork(network: kan.KANNode[][]): void {
   );
   const manager = layoutManager;
 
-  let maxY = manager.calculateRequiredHeight(network, nodeIds.length);
+  let maxY = manager.calculateRequiredHeight(network, nodeIds.length, nodeIds);
   svg.attr("height", maxY);
   manager.updateDimensions(width, maxY);
 
@@ -1144,6 +1145,16 @@ function drawNetwork(network: kan.KANNode[][]): void {
     getRelativeHeight(d3.select("#network"))
   );
   d3.select(".column.features").style("height", height + "px");
+
+  // Position the #heatmap div to align with the output layer node
+  const outputNode = kan.getKANOutputNode(network);
+  const outputNodePos = node2coord[outputNode.id];
+  if (outputNodePos) {
+    // Calculate the top position: output node's cy position minus half the heatmap size
+    // The node canvas is positioned at cy - RECT_SIZE/2, so we align the #heatmap with that
+    const heatmapTop = outputNodePos.cy - RECT_SIZE / 2 + padding;
+    d3.select("#heatmap").style("margin-top", `${heatmapTop}px`);
+  }
 }
 
 function drawLinkWithSplineChart(
@@ -1226,11 +1237,76 @@ function drawLinkWithSplineChart(
   // Update spline chart with the learnable function
   splineChart.updateFunction(edge.learnableFunction);
 
+  // Apply initial active/inactive styling
+  splineDiv.classed("inactive", !edge.isActive);
+
+  // Add click handler to toggle active state
+  splineDiv.on("click", function () {
+    edge.isActive = !edge.isActive;
+    splineDiv.classed("inactive", !edge.isActive);
+
+    // Reset histograms for ALL edges in the network, not just this one
+    // This ensures recalculation from scratch with the new network state
+    for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
+      let currentLayer = network[layerIdx];
+      for (let i = 0; i < currentLayer.length; i++) {
+        let node = currentLayer[i];
+        for (let j = 0; j < node.inputEdges.length; j++) {
+          node.inputEdges[j].resetHistogram();
+        }
+      }
+    }
+
+    // Repopulate histograms with current network state
+    trainData.forEach((point) => {
+      let input = constructInput(point.x, point.y);
+      kan.kanForwardProp(network, input, true);
+    });
+
+    // Update visualizations
+    updateWeightsUI(network, d3.select("g.core"));
+    updateDecisionBoundary(network, false);
+
+    let selectedId = selectedNodeId != null ?
+      selectedNodeId : kan.getKANOutputNode(network).id;
+    heatMap.updateBackground(boundary[selectedId], state.discretize);
+
+    d3.select("#network").selectAll("div.canvas")
+      .each(function (data: { heatmap: HeatMap, id: string }) {
+        data.heatmap.updateBackground(reduceMatrix(boundary[data.id], 10),
+          state.discretize);
+      });
+
+    // Update hover card if it's showing this edge
+    if (currentHoverCardEdge === edge && hoverCardSplineChart) {
+      const inputHistogramData = edge.getNormalizedHistogram();
+      const outputHistogramData = edge.getNormalizedOutputHistogram();
+      hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData);
+    }
+
+    // Prevent event from bubbling to hover handlers
+    const clickEvent = d3.event as Event;
+    if (clickEvent.stopPropagation) {
+      clickEvent.stopPropagation();
+    }
+  });
+
   // Add hover functionality to spline chart div
   splineDiv.on("mouseenter", function () {
     updateHoverCard(HoverType.WEIGHT, edge, [splineX, splineY]);
   }).on("mouseleave", function () {
-    updateHoverCard(null);
+    // Don't hide if user is dragging a control point
+    if (isDraggingControlPoint) {
+      return;
+    }
+    // Delay hiding to allow mouse to move to hovercard
+    hoverCardHideTimeout = window.setTimeout(() => {
+      updateHoverCard(null);
+    }, 100);
+  }).on("mousemove", function () {
+    // Track cursor position
+    const event = d3.event as MouseEvent;
+    lastMousePosition = { x: event.pageX, y: event.pageY };
   });
 
   // Draw first link: source node to spline chart
@@ -1336,7 +1412,7 @@ function updateDecisionBoundary(network: kan.KANNode[][], firstTime: boolean) {
       let x = xScale(i);
       let y = yScale(j);
       let input = constructInput(x, y);
-      kan.kanForwardProp(network, input);
+      kan.kanForwardProp(network, input, false);
       kan.forEachKANNode(network, true, node => {
         boundary[node.id][i][j] = node.output;
       });
@@ -1355,7 +1431,7 @@ function getLoss(network: kan.KANNode[][], dataPoints: Example2D[]): number {
   for (let i = 0; i < dataPoints.length; i++) {
     let dataPoint = dataPoints[i];
     let input = constructInput(dataPoint.x, dataPoint.y);
-    let output = kan.kanForwardProp(network, input);
+    let output = kan.kanForwardProp(network, input, false);
     loss += kan.Errors.SQUARE.error(output, dataPoint.label);
   }
   return loss / dataPoints.length;
@@ -1482,6 +1558,13 @@ function reset(onStartup = false) {
   const derivedGridSize = Math.max(1, Math.floor(state.numControlPoints) - 1);
 
   network = kan.buildKANNetwork(shape, constructInputIds(), derivedGridSize, state.degree, state.initNoise);
+
+  // Populate histograms with initial forward passes using training data
+  trainData.forEach((point) => {
+    let input = constructInput(point.x, point.y);
+    kan.kanForwardProp(network, input, true);
+  });
+
   lossTrain = getLoss(network, trainData);
   lossTest = getLoss(network, testData);
   drawNetwork(network);
@@ -2201,8 +2284,21 @@ function simulationStarted() {
   parametersChanged = false;
 }
 
+function isCursorOverElement(element: HTMLElement, cursorX: number, cursorY: number): boolean {
+  if (!element) return false;
+  const rect = element.getBoundingClientRect();
+  return cursorX >= rect.left && cursorX <= rect.right &&
+    cursorY >= rect.top && cursorY <= rect.bottom;
+}
+
 function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge, coordinates?: number[]) {
   let hovercard = d3.select("#hovercard");
+
+  // Clear any pending hide timeout
+  if (hoverCardHideTimeout !== null) {
+    clearTimeout(hoverCardHideTimeout);
+    hoverCardHideTimeout = null;
+  }
 
   if (type == null) {
     // Hide the hover card immediately
@@ -2282,11 +2378,90 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
       showYAxisLabels: true,
       showXAxisValues: true,
       showYAxisValues: true,
-      showBorder: false
+      showBorder: false,
+      showActivationHistogram: true,
+      histogramOpacity: 0.3,
+      histogramColor: "#4A90E2",
+      outputHistogramColor: "#4A90E2",
+      interactive: true
     });
 
-    // Update with the learnable function and track the current edge
-    hoverCardSplineChart.updateFunction(edge.learnableFunction);
+    // Set callback to update the main network visualization when control points change
+    hoverCardSplineChart.setOnControlPointChange((index: number, newValue: number) => {
+      // Clear the histogram since the spline function has changed
+      edge.resetHistogram();
+
+      // Run forward passes with training data to repopulate histograms
+      trainData.forEach((point) => {
+        let input = constructInput(point.x, point.y);
+        kan.kanForwardProp(network, input, true);
+      });
+
+      // Only update the edge visualization immediately (lightweight)
+      let edgeId = `${edge.sourceNode.id}-${edge.destNode.id}`;
+      if (edgeSplineCharts[edgeId]) {
+        edgeSplineCharts[edgeId].updateFunction(edge.learnableFunction);
+      }
+
+      // Update the hovercard's histogram display with fresh activation data
+      const inputHistogramData = edge.getNormalizedHistogram();
+      const outputHistogramData = edge.getNormalizedOutputHistogram();
+      hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData);
+
+      // Update link colors/widths for this specific edge using absolute std values
+      const inputStdBoundary = 0.6;  // Typical std for inputs in [-1, 1] range
+      const outputStdBoundary = 0.6; // Typical std for outputs in [-1, 1] range
+
+      const inputStd = edge.getInputActivationStd();
+      const outputStd = edge.getOutputActivationStd();
+      const normalizedInputStd = Math.min(1, inputStd / inputStdBoundary);
+      const normalizedOutputStd = Math.min(1, outputStd / outputStdBoundary);
+
+      let svgContainer = d3.select("g.core");
+      svgContainer.select(`#link${edgeId}-part1`)
+        .style({
+          "stroke-width": linkWidthScale(normalizedInputStd),
+          "stroke": linkColorScale(normalizedInputStd)
+        });
+      svgContainer.select(`#link${edgeId}-part2`)
+        .style({
+          "stroke-width": linkWidthScale(normalizedOutputStd),
+          "stroke": linkColorScale(normalizedOutputStd)
+        });
+    });
+
+    // Set callbacks for drag start and end to prevent hovercard from hiding during drag
+    hoverCardSplineChart.setOnDragStart(() => {
+      isDraggingControlPoint = true;
+    });
+
+    hoverCardSplineChart.setOnDragEnd(() => {
+      isDraggingControlPoint = false;
+
+      // NOW update expensive visualizations after drag is complete
+      updateWeightsUI(network, d3.select("g.core"));
+      updateDecisionBoundary(network, false);
+
+      // Update the main heatmap
+      let selectedId = selectedNodeId != null ?
+        selectedNodeId : kan.getKANOutputNode(network).id;
+      heatMap.updateBackground(boundary[selectedId], state.discretize);
+
+      // Update all node-specific heatmaps
+      d3.select("#network").selectAll("div.canvas")
+        .each(function (data: { heatmap: HeatMap, id: string }) {
+          data.heatmap.updateBackground(reduceMatrix(boundary[data.id], 10),
+            state.discretize);
+        });
+
+      // Don't hide the hovercard after drag - let the normal mouse leave handlers manage it
+    });
+
+    // Update with the learnable function and histogram data
+    const inputHistogramData = edge.getNormalizedHistogram();
+    const outputHistogramData = edge.getNormalizedOutputHistogram();
+    hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData);
+
     currentHoverCardEdge = edge;
   }
 }
@@ -2348,6 +2523,34 @@ updateProblemSpecificUI();
 drawDatasetThumbnails();
 initTutorial();
 makeGUI();
+
+// Set up hovercard event handlers to keep it visible when mouse is over it
+// and hide it when mouse leaves it
+// Use native DOM addEventListener with capture:true to catch events from child elements
+const hovercardElement = document.getElementById("hovercard");
+
+hovercardElement.addEventListener("mouseenter", function () {
+  // Cancel any pending hide timeout when mouse enters hovercard
+  if (hoverCardHideTimeout !== null) {
+    clearTimeout(hoverCardHideTimeout);
+    hoverCardHideTimeout = null;
+  }
+});
+
+hovercardElement.addEventListener("mousemove", function (event: MouseEvent) {
+  // Track cursor position
+  lastMousePosition = { x: event.pageX, y: event.pageY };
+}, true); // Use capture phase to catch events from child elements
+
+hovercardElement.addEventListener("mouseleave", function () {
+  // Don't hide the hovercard if user is dragging a control point
+  if (isDraggingControlPoint) {
+    return;
+  }
+  // Hide the hovercard when mouse leaves it
+  updateHoverCard(null);
+});
+
 generateData(true);
 reset(true);
 hideControls();

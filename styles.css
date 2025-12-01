@@ -231,6 +231,9 @@ header h1 .optional {
 /* Top Controls */
 
 #top-controls {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
   border-bottom: 1px solid #ddd;
   padding: 18px 0;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
@@ -384,6 +387,22 @@ header h1 .optional {
 
 #hovercard svg {
   display: block;
+}
+
+/* Interactive control points in hover card */
+#hovercard .control-point {
+  cursor: ns-resize;
+  transition: r 0.1s ease, stroke-width 0.1s ease;
+}
+
+#hovercard .control-point:hover {
+  r: 8;
+  stroke-width: 3;
+}
+
+#hovercard .control-point:active {
+  stroke-width: 3;
+  opacity: 0.8;
 }
 
 /* Main Part*/
@@ -770,6 +789,21 @@ g.column rect {
   border: 2px solid #666;
   top: -2px;
   left: -2px;
+}
+
+/* Spline charts */
+
+.spline-chart {
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.spline-chart.inactive {
+  opacity: 0.3;
+}
+
+.spline-chart.inactive svg {
+  filter: grayscale(100%);
 }
 
 /* Hidden layers column */

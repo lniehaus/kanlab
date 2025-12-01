@@ -269,6 +269,21 @@ export class KANEdge {
   lastInput: number = 0;
   accGradients: number[] = [];
   numAccumulatedGrads: number = 0;
+  isActive: boolean = true;
+  
+  // Histogram tracking for activation visualization
+  activationHistogram: number[] = [];
+  outputHistogram: number[] = [];
+  histogramBins: number = 20;
+  histogramRange: [number, number] = [-1, 1];
+  outputHistogramRange: [number, number] = [-2, 2];
+  
+  // Track observed ranges for adaptive histograms
+  private observedInputMin: number = Infinity;
+  private observedInputMax: number = -Infinity;
+  private observedOutputMin: number = Infinity;
+  private observedOutputMax: number = -Infinity;
+  private useAdaptiveRanges: boolean = false;
 
   constructor(
     source: KANNode,
@@ -291,16 +306,172 @@ export class KANEdge {
     for (let i = 0; i < numControlPoints; i++) {
       this.accGradients.push(0);
     }
+    
+    // Initialize histogram
+    this.resetHistogram();
   }
 
   /** Forward pass through the edge */
-  forward(input: number): number {
+  forward(input: number, recordHistogram: boolean = true): number {
     this.lastInput = input;
-    return this.learnableFunction.evaluate(input);
+    
+    // If edge is deactivated, return 0
+    if (!this.isActive) {
+      return 0;
+    }
+    
+    if (recordHistogram) {
+      this.recordActivation(input);
+    }
+    const output = this.learnableFunction.evaluate(input);
+    if (recordHistogram) {
+      this.recordOutput(output);
+    }
+    return output;
+  }
+  
+  /** Record activation for histogram visualization */
+  recordActivation(input: number): void {
+    // Track observed range for adaptive histograms
+    this.observedInputMin = Math.min(this.observedInputMin, input);
+    this.observedInputMax = Math.max(this.observedInputMax, input);
+    
+    // Clamp to range
+    input = Math.max(this.histogramRange[0], 
+                     Math.min(this.histogramRange[1], input));
+    
+    // Find bin index
+    const [min, max] = this.histogramRange;
+    const binWidth = (max - min) / this.histogramBins;
+    const binIndex = Math.floor((input - min) / binWidth);
+    const clampedIndex = Math.max(0, Math.min(this.histogramBins - 1, binIndex));
+    
+    // Increment count
+    this.activationHistogram[clampedIndex]++;
+  }
+  
+  /** Record output for histogram visualization */
+  recordOutput(output: number): void {
+    // Track observed range for adaptive histograms
+    this.observedOutputMin = Math.min(this.observedOutputMin, output);
+    this.observedOutputMax = Math.max(this.observedOutputMax, output);
+    
+    // Clamp to range
+    output = Math.max(this.outputHistogramRange[0], 
+                      Math.min(this.outputHistogramRange[1], output));
+    
+    // Find bin index
+    const [min, max] = this.outputHistogramRange;
+    const binWidth = (max - min) / this.histogramBins;
+    const binIndex = Math.floor((output - min) / binWidth);
+    const clampedIndex = Math.max(0, Math.min(this.histogramBins - 1, binIndex));
+    
+    // Increment count
+    this.outputHistogram[clampedIndex]++;
+  }
+  
+  /** Get normalized histogram for visualization */
+  getNormalizedHistogram(): number[] {
+    const maxCount = Math.max(...this.activationHistogram, 1);
+    return this.activationHistogram.map(count => count / maxCount);
+  }
+  
+  /** Get normalized output histogram for visualization */
+  getNormalizedOutputHistogram(): number[] {
+    const maxCount = Math.max(...this.outputHistogram, 1);
+    return this.outputHistogram.map(count => count / maxCount);
+  }
+  
+  /** Helper method to calculate standard deviation from histogram data */
+  private calculateStdFromHistogram(histogram: number[], range: [number, number]): number {
+    const totalCount = histogram.reduce((sum, count) => sum + count, 0);
+    if (totalCount === 0) return 0;
+    
+    const [min, max] = range;
+    const binWidth = (max - min) / this.histogramBins;
+    
+    // Calculate mean
+    let mean = 0;
+    for (let i = 0; i < this.histogramBins; i++) {
+      const binCenter = min + (i + 0.5) * binWidth;
+      mean += binCenter * histogram[i];
+    }
+    mean /= totalCount;
+    
+    // Calculate variance
+    let variance = 0;
+    for (let i = 0; i < this.histogramBins; i++) {
+      const binCenter = min + (i + 0.5) * binWidth;
+      const diff = binCenter - mean;
+      variance += diff * diff * histogram[i];
+    }
+    variance /= totalCount;
+    
+    return Math.sqrt(variance);
+  }
+  
+  /** Calculate standard deviation of input activations from histogram */
+  getInputActivationStd(): number {
+    return this.calculateStdFromHistogram(this.activationHistogram, this.histogramRange);
+  }
+  
+  /** Calculate standard deviation of output activations from histogram */
+  getOutputActivationStd(): number {
+    return this.calculateStdFromHistogram(this.outputHistogram, this.outputHistogramRange);
+  }
+  
+  /** Get observed input activation range */
+  getObservedInputRange(): [number, number] {
+    return [this.observedInputMin, this.observedInputMax];
+  }
+  
+  /** Get observed output activation range */
+  getObservedOutputRange(): [number, number] {
+    return [this.observedOutputMin, this.observedOutputMax];
+  }
+  
+  /** Enable adaptive histogram ranges based on observed values */
+  enableAdaptiveRanges(): void {
+    this.useAdaptiveRanges = true;
+    if (this.observedInputMin < Infinity && this.observedInputMax > -Infinity) {
+      const inputPadding = (this.observedInputMax - this.observedInputMin) * 0.1;
+      this.histogramRange = [
+        this.observedInputMin - inputPadding,
+        this.observedInputMax + inputPadding
+      ];
+    }
+    if (this.observedOutputMin < Infinity && this.observedOutputMax > -Infinity) {
+      const outputPadding = (this.observedOutputMax - this.observedOutputMin) * 0.1;
+      this.outputHistogramRange = [
+        this.observedOutputMin - outputPadding,
+        this.observedOutputMax + outputPadding
+      ];
+    }
+  }
+  
+  /** Reset histogram */
+  resetHistogram(): void {
+    this.activationHistogram = [];
+    this.outputHistogram = [];
+    for (let i = 0; i < this.histogramBins; i++) {
+      this.activationHistogram.push(0);
+      this.outputHistogram.push(0);
+    }
+    
+    // Reset observed ranges
+    this.observedInputMin = Infinity;
+    this.observedInputMax = -Infinity;
+    this.observedOutputMin = Infinity;
+    this.observedOutputMax = -Infinity;
   }
 
   /** Accumulate gradients for parameter updates */
   accumulateGradients(outputGradient: number): void {
+    // Don't accumulate gradients if edge is inactive
+    if (!this.isActive) {
+      return;
+    }
+    
     // Get gradients with respect to control points
     const controlPointGradients = this.learnableFunction.getControlPointGradients(this.lastInput);
     
@@ -314,6 +485,11 @@ export class KANEdge {
 
   /** Update parameters using accumulated gradients */
   updateParameters(learningRate: number): void {
+    // Don't update parameters if edge is inactive
+    if (!this.isActive) {
+      return;
+    }
+    
     if (this.numAccumulatedGrads > 0) {
       const avgGradients = this.accGradients.map(g => g / this.numAccumulatedGrads);
       this.learnableFunction.updateParameters(avgGradients, learningRate);
@@ -346,10 +522,10 @@ export class KANNode {
   }
 
   /** Forward pass: sum all edge outputs */
-  forward(): number {
+  forward(recordHistogram: boolean = true): number {
     this.output = 0;
     for (const edge of this.inputEdges) {
-      this.output += edge.forward(edge.sourceNode.output);
+      this.output += edge.forward(edge.sourceNode.output, recordHistogram);
     }
     return this.output;
   }
@@ -416,7 +592,7 @@ export function buildKANNetwork(
 /**
  * Forward propagation through KAN network
  */
-export function kanForwardProp(network: KANNode[][], inputs: number[]): number {
+export function kanForwardProp(network: KANNode[][], inputs: number[], recordHistogram: boolean = true): number {
   const inputLayer = network[0];
   if (inputs.length !== inputLayer.length) {
     throw new Error("Number of inputs must match input layer size");
@@ -431,7 +607,7 @@ export function kanForwardProp(network: KANNode[][], inputs: number[]): number {
   for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
     const currentLayer = network[layerIdx];
     for (const node of currentLayer) {
-      node.forward();
+      node.forward(recordHistogram);
     }
   }
 
@@ -487,6 +663,18 @@ export function updateKANWeights(network: KANNode[][], learningRate: number): vo
 /** Get output node from KAN network */
 export function getKANOutputNode(network: KANNode[][]): KANNode {
   return network[network.length - 1][0];
+}
+
+/** Reset all activation histograms in the network */
+export function resetKANHistograms(network: KANNode[][]): void {
+  for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
+    const currentLayer = network[layerIdx];
+    for (const node of currentLayer) {
+      for (const edge of node.inputEdges) {
+        edge.resetHistogram();
+      }
+    }
+  }
 }
 
 /** Iterate over all nodes in KAN network */

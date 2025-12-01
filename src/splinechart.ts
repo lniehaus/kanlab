@@ -27,9 +27,16 @@ export interface SplineChartSettings {
   showXAxisValues?: boolean;
   showYAxisValues?: boolean;
   showBorder?: boolean;
+  showActivationHistogram?: boolean;
+  histogramOpacity?: number;
+  histogramColor?: string;
+  outputHistogramColor?: string;
+  histogramSize?: number;
+  histogramGap?: number;
   title?: string;
   width?: number;
   height?: number;
+  interactive?: boolean;
 }
 
 /**
@@ -47,9 +54,16 @@ export class SplineChart {
     showXAxisValues: false,
     showYAxisValues: false,
     showBorder: false,
+    showActivationHistogram: false,
+    histogramOpacity: 0.3,
+    histogramColor: "#4A90E2",
+    outputHistogramColor: "#4A90E2",
+    histogramSize: 50,
+    histogramGap: 10,
     title: "Learnable Function",
     width: 300,
-    height: 200
+    height: 200,
+    interactive: false
   };
 
   protected svg: any;
@@ -64,6 +78,13 @@ export class SplineChart {
   private baseMargin = { top: 2, right: 2, bottom: 2, left: 2 };
   private margin = { top: 2, right: 2, bottom: 2, left: 2 };
   private currentFunction: LearnableFunction | null = null;
+  private dragBehavior: any = null;
+  private onControlPointChange: ((index: number, newValue: number) => void) | null = null;
+  private onDragStart: (() => void) | null = null;
+  private onDragEnd: (() => void) | null = null;
+  private isDragging: boolean = false;
+  private targetYDomain: [number, number] | null = null;
+  private smoothingTimer: any = null;
 
   constructor(container: any, userSettings?: SplineChartSettings) {
     if (userSettings != null) {
@@ -105,9 +126,17 @@ export class SplineChart {
       this.margin.bottom = 30;
     }
 
-    // Reduce top margin if title exists
+    // Extend top margin for title and histogram
     if (this.settings.title && this.settings.title.trim() !== "") {
-      this.margin.top = 30; // Minimal margin to match bottom when no axes
+      this.margin.top = 30; // Minimal margin when title exists
+    }
+
+    // Add additional space at top if histogram is shown (Seaborn joint plot style)
+    if (this.settings.showActivationHistogram) {
+      const histogramSize = this.settings.histogramSize || 50;
+      const histogramGap = this.settings.histogramGap || 10;
+      this.margin.top += histogramSize + histogramGap;
+      this.margin.right += histogramSize + histogramGap;
     }
   }
 
@@ -146,10 +175,12 @@ export class SplineChart {
 
     // Add title
     if (this.settings.title) {
+      // Position title above histogram if shown, otherwise just above plot
+      const titleY = this.settings.showActivationHistogram ? -70 : -10;
       this.svg.append("text")
         .attr("class", "spline-title")
         .attr("x", this.width / 2)
-        .attr("y", -10)
+        .attr("y", titleY)
         .attr("text-anchor", "middle")
         .style("font-size", "14px")
         .style("font-weight", "bold")
@@ -193,10 +224,12 @@ export class SplineChart {
 
     // Add title
     if (this.settings.title) {
+      // Position title above histogram if shown, otherwise just above plot
+      const titleY = this.settings.showActivationHistogram ? -70 : -10;
       this.svg.append("text")
         .attr("class", "spline-title")
         .attr("x", this.width / 2)
-        .attr("y", -10)
+        .attr("y", titleY)
         .attr("text-anchor", "middle")
         .style("font-size", "14px")
         .style("font-weight", "bold")
@@ -337,7 +370,7 @@ export class SplineChart {
   /**
    * Update the chart with a new learnable function
    */
-  updateFunction(learnableFunction: LearnableFunction): void {
+  updateFunction(learnableFunction: LearnableFunction, inputHistogramData?: number[], outputHistogramData?: number[]): void {
     this.currentFunction = learnableFunction;
 
     // Update Y scale based on function range
@@ -347,10 +380,21 @@ export class SplineChart {
     this.svg.selectAll(".spline-curve").remove();
     this.svg.selectAll(".control-point").remove();
     this.svg.selectAll(".knot-line").remove();
-
+    this.svg.selectAll(".activation-histogram").remove();
+    this.svg.selectAll(".output-histogram").remove();
     // Clear old control paths only if showOldControlPaths is false
     if (!this.settings.showOldControlPaths) {
       this.svg.selectAll(".control-polygon").remove();
+    }
+
+    // Draw histograms FIRST (so they're behind the curve)
+    if (this.settings.showActivationHistogram) {
+      if (inputHistogramData && inputHistogramData.length > 0) {
+        this.drawActivationHistogram(inputHistogramData);
+      }
+      if (outputHistogramData && outputHistogramData.length > 0) {
+        this.drawOutputHistogram(outputHistogramData);
+      }
     }
 
     // Draw the spline curve
@@ -396,6 +440,19 @@ export class SplineChart {
     minY -= padding;
     maxY += padding;
 
+    // For interactive charts, ensure minimum range of -1.1 to +1.1
+    if (this.settings.interactive) {
+      minY = Math.min(minY, -1.1);
+      maxY = Math.max(maxY, 1.1);
+    }
+
+    // If dragging, store target domain and apply smoothing
+    if (this.isDragging) {
+      this.targetYDomain = [minY, maxY];
+      this.smoothYScale();
+      return;
+    }
+
     // Update scale
     this.yScale.domain([minY, maxY]);
 
@@ -412,14 +469,14 @@ export class SplineChart {
 
     this.svg.select(".y.axis")
       .transition()
-      .duration(0) // 300
+      .duration(200)
       .call(yAxis);
 
     // Update horizontal grid lines
     if (this.settings.showGrid) {
       // Remove old grid lines and redraw them
       this.svg.selectAll("line.horizontal").remove();
-      
+
       this.svg.select(".grid")
         .selectAll("line.horizontal")
         .data(this.yScale.ticks(5))
@@ -479,20 +536,94 @@ export class SplineChart {
       return { x, y, index: i };
     });
 
+    // Create or update drag behavior if interactive
+    if (this.settings.interactive && !this.dragBehavior) {
+      this.dragBehavior = d3.behavior.drag()
+        .origin((d: any) => {
+          return { x: this.xScale(d.x), y: this.yScale(d.y) };
+        })
+        .on("dragstart", () => {
+          // Set dragging flag for smooth Y-axis transitions
+          this.isDragging = true;
+          // Notify that dragging has started
+          if (this.onDragStart) {
+            this.onDragStart();
+          }
+        })
+        .on("drag", (d: any) => {
+          // Update y position based on drag
+          const event: any = d3.event;
+          const newY = this.yScale.invert(event.y);
+          d.y = newY;
+
+          // Update the control point in the function
+          if (this.currentFunction) {
+            this.currentFunction.controlPoints[d.index] = newY;
+          }
+
+          // Update visual position
+          d3.select(event.sourceEvent.target)
+            .attr("cy", event.y);
+
+          // Redraw the spline curve and control polygon
+          this.redrawCurve();
+
+          // Notify callback if set
+          if (this.onControlPointChange) {
+            this.onControlPointChange(d.index, newY);
+          }
+        })
+        .on("dragend", () => {
+          // Clear dragging flag and ensure final update
+          this.isDragging = false;
+          if (this.smoothingTimer) {
+            clearTimeout(this.smoothingTimer);
+            this.smoothingTimer = null;
+          }
+          // Apply final target domain if it exists
+          if (this.targetYDomain) {
+            this.yScale.domain(this.targetYDomain);
+            this.targetYDomain = null;
+            // Update axis with the final domain
+            let yAxis = d3.svg.axis()
+              .scale(this.yScale)
+              .orient("left");
+            if (this.settings.showYAxisValues) {
+              yAxis.ticks(5);
+            } else {
+              yAxis.ticks(0);
+            }
+            this.svg.select(".y.axis").call(yAxis);
+          }
+          // Notify that dragging has ended
+          if (this.onDragEnd) {
+            this.onDragEnd();
+          }
+        });
+    }
+
     // Draw control points
-    this.svg.selectAll(".control-point")
+    const points = this.svg.selectAll(".control-point")
       .data(controlPointData)
       .enter()
       .append("circle")
       .attr("class", "control-point")
       .attr("cx", (d: any) => this.xScale(d.x))
       .attr("cy", (d: any) => this.yScale(d.y))
-      .attr("r", 4)
-      .style("fill", "#E67E22")
+      .attr("r", this.settings.interactive ? 6 : 4)
+      .style("fill", this.settings.interactive ? "#E67E22" : "#E67E22")
       .style("stroke", "#D35400")
       .style("stroke-width", 2)
-      .append("title")
-      .text((d: any) => `Control Point ${d.index}\nPosition: (${d.x.toFixed(2)}, ${d.y.toFixed(3)})`);
+      .style("cursor", this.settings.interactive ? "ns-resize" : "default");
+
+    // Add drag behavior if interactive
+    if (this.settings.interactive && this.dragBehavior) {
+      points.call(this.dragBehavior);
+    }
+
+    // Add tooltips
+    points.append("title")
+      .text((d: any) => `Control Point ${d.index}\nPosition: (${d.x.toFixed(2)}, ${d.y.toFixed(3)})${this.settings.interactive ? '\nDrag to adjust' : ''}`);
 
     // Draw lines connecting control points
     if (controlPointData.length > 1) {
@@ -562,6 +693,91 @@ export class SplineChart {
   }
 
   /**
+   * Draw activation histogram as semi-transparent bars above the main plot (Seaborn joint plot style)
+   */
+  private drawActivationHistogram(histogramData: number[]): void {
+    if (!histogramData || histogramData.length === 0) return;
+
+    const numBins = histogramData.length;
+    const histogramHeight = this.settings.histogramSize || 50;
+    const histogramGap = this.settings.histogramGap || 10;
+
+    // The histogram bins represent the range [-1, 1] (matching xScale domain)
+    const xMin = -1;
+    const xMax = 1;
+    const binWidth = (xMax - xMin) / numBins;
+
+    // Create histogram group positioned above the main plot
+    const histogramGroup = this.svg.append("g")
+      .attr("class", "activation-histogram")
+      .attr("transform", `translate(0, ${-histogramHeight - histogramGap})`);
+
+    // Draw bars (growing upward from bottom) using xScale for positioning
+    histogramGroup.selectAll("rect.histogram-bar")
+      .data(histogramData)
+      .enter()
+      .append("rect")
+      .attr("class", "histogram-bar")
+      .attr("x", (d: number, i: number) => {
+        const binStart = xMin + i * binWidth;
+        return this.xScale(binStart);
+      })
+      .attr("y", (d: number) => histogramHeight - (d * histogramHeight)) // Start from bottom of histogram area
+      .attr("width", (d: number, i: number) => {
+        const binStart = xMin + i * binWidth;
+        const binEnd = xMin + (i + 1) * binWidth;
+        return Math.max(1, this.xScale(binEnd) - this.xScale(binStart) - 1);
+      })
+      .attr("height", (d: number) => d * histogramHeight)
+      .style("fill", this.settings.histogramColor || "#4A90E2")
+      .style("opacity", this.settings.histogramOpacity || 0.3)
+      .style("pointer-events", "none");
+  }
+
+  /**
+   * Draw output histogram as semi-transparent bars on the right side (Seaborn joint plot style)
+   */
+  private drawOutputHistogram(histogramData: number[]): void {
+    if (!histogramData || histogramData.length === 0) return;
+
+    const numBins = histogramData.length;
+    const histogramWidth = this.settings.histogramSize || 50;
+    const histogramGap = this.settings.histogramGap || 10;
+
+    // The histogram bins represent the range [-2, 2] (matching yScale domain)
+    const yMin = -2;
+    const yMax = 2;
+    const binHeight = (yMax - yMin) / numBins;
+
+    // Create histogram group positioned to the right of the main plot
+    const histogramGroup = this.svg.append("g")
+      .attr("class", "output-histogram")
+      .attr("transform", `translate(${this.width + histogramGap}, 0)`);
+
+    // Draw bars (growing rightward from left edge) using yScale for positioning
+    histogramGroup.selectAll("rect.output-histogram-bar")
+      .data(histogramData)
+      .enter()
+      .append("rect")
+      .attr("class", "output-histogram-bar")
+      .attr("x", 0) // Start from left edge
+      .attr("y", (d: number, i: number) => {
+        const binStart = yMin + i * binHeight;
+        const binEnd = yMin + (i + 1) * binHeight;
+        return this.yScale(binEnd); // yScale is inverted (higher y values = lower on screen)
+      })
+      .attr("width", (d: number) => d * histogramWidth)
+      .attr("height", (d: number, i: number) => {
+        const binStart = yMin + i * binHeight;
+        const binEnd = yMin + (i + 1) * binHeight;
+        return Math.max(1, Math.abs(this.yScale(binStart) - this.yScale(binEnd)) - 1);
+      })
+      .style("fill", this.settings.outputHistogramColor || "#E24A90")
+      .style("opacity", this.settings.histogramOpacity || 0.3)
+      .style("pointer-events", "none");
+  }
+
+  /**
    * Clear the chart
    */
   clear(): void {
@@ -570,6 +786,133 @@ export class SplineChart {
     this.svg.selectAll(".control-polygon").remove();
     this.svg.selectAll(".knot-line").remove();
     this.currentFunction = null;
+  }
+
+  /**
+   * Smoothly interpolate Y-axis scale towards target domain
+   */
+  private smoothYScale(): void {
+    if (!this.targetYDomain) return;
+
+    const currentDomain = this.yScale.domain();
+    const [targetMin, targetMax] = this.targetYDomain;
+    const [currentMin, currentMax] = currentDomain;
+
+    // Interpolation factor (0.15 = 15% of the way to target per frame)
+    const alpha = 0.15;
+
+    // Calculate new domain
+    const newMin = currentMin + (targetMin - currentMin) * alpha;
+    const newMax = currentMax + (targetMax - currentMax) * alpha;
+
+    // Check if we're close enough to target (within 0.01)
+    const isClose = Math.abs(newMin - targetMin) < 0.01 && Math.abs(newMax - targetMax) < 0.01;
+
+    if (isClose) {
+      // Snap to target
+      this.yScale.domain([targetMin, targetMax]);
+    } else {
+      // Apply interpolated domain
+      this.yScale.domain([newMin, newMax]);
+
+      // Schedule next smoothing step
+      if (this.smoothingTimer) {
+        clearTimeout(this.smoothingTimer);
+      }
+      this.smoothingTimer = setTimeout(() => this.smoothYScale(), 16); // ~60fps
+    }
+
+    // Update Y axis without transition (we're handling the smoothing manually)
+    let yAxis = d3.svg.axis()
+      .scale(this.yScale)
+      .orient("left");
+
+    if (this.settings.showYAxisValues) {
+      yAxis.ticks(5);
+    } else {
+      yAxis.ticks(0);
+    }
+
+    this.svg.select(".y.axis")
+      .call(yAxis);
+
+    // Update horizontal grid lines if shown
+    if (this.settings.showGrid) {
+      this.svg.selectAll("line.horizontal").remove();
+
+      this.svg.select(".grid")
+        .selectAll("line.horizontal")
+        .data(this.yScale.ticks(5))
+        .enter()
+        .append("line")
+        .attr("class", "horizontal")
+        .attr("x1", 0)
+        .attr("x2", this.width)
+        .attr("y1", (d: number) => this.yScale(d))
+        .attr("y2", (d: number) => this.yScale(d))
+        .style("stroke", "#e0e0e0")
+        .style("stroke-width", 1);
+    }
+  }
+
+  /**
+   * Redraw only the spline curve and control polygon (used during drag)
+   */
+  private redrawCurve(): void {
+    if (!this.currentFunction) return;
+
+    // Remove old curve and control polygon
+    this.svg.selectAll(".spline-curve").remove();
+    this.svg.selectAll(".control-polygon").remove();
+
+    // Redraw spline curve
+    this.drawSplineCurve();
+
+    // Redraw control polygon
+    const controlPoints = this.currentFunction.controlPoints;
+    const numPoints = controlPoints.length;
+    const controlPointData = controlPoints.map((y, i) => {
+      const x = -1 + (2 * i) / (numPoints - 1);
+      return { x, y, index: i };
+    });
+
+    if (controlPointData.length > 1) {
+      const controlLine = d3.svg.line()
+        .x((d: any) => this.xScale(d.x))
+        .y((d: any) => this.yScale(d.y))
+        .interpolate("linear");
+
+      this.svg.append("path")
+        .datum(controlPointData)
+        .attr("class", "control-polygon")
+        .attr("d", controlLine)
+        .style("fill", "none")
+        .style("stroke", "#E67E22")
+        .style("stroke-width", 1)
+        .style("stroke-dasharray", "5,5")
+        .style("opacity", 0.5);
+    }
+  }
+
+  /**
+   * Set callback for control point changes
+   */
+  setOnControlPointChange(callback: (index: number, newValue: number) => void): void {
+    this.onControlPointChange = callback;
+  }
+
+  /**
+   * Set callback for drag start
+   */
+  setOnDragStart(callback: () => void): void {
+    this.onDragStart = callback;
+  }
+
+  /**
+   * Set callback for drag end
+   */
+  setOnDragEnd(callback: () => void): void {
+    this.onDragEnd = callback;
   }
 
   /**

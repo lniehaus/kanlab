@@ -120,22 +120,106 @@ export class NetworkLayoutManager {
   }
 
   /**
+   * Calculate the total number of columns in the network visualization
+   * Columns alternate: heatmap -> spline -> heatmap -> spline -> ... -> heatmap
+   * For N layers: 1 input + (N-1) hidden/output = N heatmap columns
+   *               N-1 spline columns between them
+   *               Total = N + (N-1) = 2N - 1 columns
+   */
+  private calculateTotalColumns(numLayers: number): number {
+    return 2 * numLayers - 1;
+  }
+
+  /**
+   * Calculate X coordinate for a specific column index with equal spacing
+   * Column indices: 0 = input heatmaps, 1 = first splines, 2 = first hidden heatmaps, etc.
+   */
+  private calculateColumnX(columnIdx: number, totalColumns: number): number {
+    const startX = this.rectSize / 2 + 50; // Starting position for input layer
+    const endX = this.svgWidth + this.rectSize / 2; // Ending position for output layer
+    const availableWidth = endX - startX;
+    const columnSpacing = availableWidth / (totalColumns - 1);
+    
+    return startX + (columnIdx * columnSpacing);
+  }
+
+  /**
+   * Map layer index to column index
+   * Layer 0 -> Column 0 (input heatmaps)
+   * Layer 1 -> Column 2 (first hidden layer heatmaps, after first spline column)
+   * Layer 2 -> Column 4 (second hidden layer heatmaps, after second spline column)
+   * etc.
+   */
+  private layerToColumnIndex(layerIdx: number): number {
+    return layerIdx * 2;
+  }
+
+  /**
+   * Calculate column index for spline charts between two layers
+   * Splines between layer 0 and 1 -> Column 1
+   * Splines between layer 1 and 2 -> Column 3
+   * etc.
+   */
+  private splineColumnIndex(destLayerIdx: number): number {
+    return destLayerIdx * 2 - 1;
+  }
+
+  /**
    * Calculate X coordinate for a layer in the network
+   * Uses column-based positioning for equal spacing
    */
   calculateLayerX(layerIdx: number, numLayers: number): number {
-    if (layerIdx === 0) {
-      // Input layer
-      return this.rectSize / 2 + 50;
-    } else if (layerIdx === numLayers - 1) {
-      // Output layer
-      return this.svgWidth + this.rectSize / 2;
-    } else {
-      // Hidden layers - distribute evenly between input and output
-      const layerScale = d3.scale.ordinal<number, number>()
-        .domain(d3.range(1, numLayers - 1))
-        .rangePoints([this.featureWidth, this.svgWidth - this.rectSize], 0.7);
-      return layerScale(layerIdx) + this.rectSize / 2;
+    const totalColumns = this.calculateTotalColumns(numLayers);
+    const columnIdx = this.layerToColumnIndex(layerIdx);
+    return this.calculateColumnX(columnIdx, totalColumns);
+  }
+
+  /**
+   * Calculate the number of elements in each column
+   * Columns alternate between node layers (heatmaps) and edge layers (spline charts)
+   * For input features, returns the span from first to last active feature (not just count)
+   */
+  private getColumnElementCounts(network: kan.KANNode[][], numInputs: number, inputIds: string[]): number[] {
+    const counts: number[] = [];
+    const numLayers = network.length;
+    
+    // Column 0: input layer heatmaps - calculate span from first to last active feature
+    // The active features are those in the first layer of the network
+    const activeInputIds = network[0].map(node => node.id);
+    
+    // Find first and last index of active features in the full inputIds array
+    let firstActiveIdx = -1;
+    let lastActiveIdx = -1;
+    
+    for (let i = 0; i < inputIds.length; i++) {
+      if (activeInputIds.indexOf(inputIds[i]) !== -1) {
+        if (firstActiveIdx === -1) {
+          firstActiveIdx = i;
+        }
+        lastActiveIdx = i;
+      }
     }
+    
+    // The span is from first to last active feature (inclusive)
+    // This means if features 0 and 6 are active, span is 7 positions
+    if (firstActiveIdx !== -1 && lastActiveIdx !== -1) {
+      counts.push(lastActiveIdx - firstActiveIdx + 1);
+    } else {
+      // Fallback to number of inputs if no active features found
+      counts.push(numInputs);
+    }
+    
+    // For each layer after input
+    for (let layerIdx = 1; layerIdx < numLayers; layerIdx++) {
+      // Column for spline charts (edges coming into this layer)
+      const numEdges = network[layerIdx].reduce((sum, node) => sum + node.inputEdges.length, 0);
+      counts.push(numEdges);
+      
+      // Column for heatmaps (nodes in this layer)
+      counts.push(network[layerIdx].length);
+    }
+    
+    return counts;
   }
 
   /**
@@ -148,12 +232,20 @@ export class NetworkLayoutManager {
     const numLayers = network.length;
     const layers: LayerLayout[] = [];
     const node2coord: {[id: string]: NodePosition} = {};
+    
+    // Calculate column element counts and find max
+    const columnCounts = this.getColumnElementCounts(network, inputIds.length, inputIds);
+    const maxColumnCount = Math.max(...columnCounts);
+    
+    // Calculate vertical offset for input layer (column 0)
+    const inputColumnCount = columnCounts[0];
+    const inputOffset = ((maxColumnCount - inputColumnCount) * (this.rectSize + this.spacing)) / 2;
 
     // Input layer (layer 0)
     const inputCx = this.calculateLayerX(0, numLayers);
     const inputPositions: NodePosition[] = [];
     inputIds.forEach((nodeId, i) => {
-      const pos = this.getNodePosition(i, inputCx);
+      const pos = this.getNodePosition(i, inputCx, inputOffset);
       node2coord[nodeId] = pos;
       inputPositions.push(pos);
     });
@@ -168,9 +260,14 @@ export class NetworkLayoutManager {
       const layerNodes = network[layerIdx];
       const cx = this.calculateLayerX(layerIdx, numLayers);
       const nodePositions: NodePosition[] = [];
+      
+      // Column index for this layer's heatmaps
+      const columnIdx = layerIdx * 2;
+      const layerColumnCount = columnCounts[columnIdx];
+      const layerOffset = ((maxColumnCount - layerColumnCount) * (this.rectSize + this.spacing)) / 2;
 
       layerNodes.forEach((node, i) => {
-        const pos = this.getNodePosition(i, cx);
+        const pos = this.getNodePosition(i, cx, layerOffset);
         node2coord[node.id] = pos;
         nodePositions.push(pos);
       });
@@ -185,7 +282,7 @@ export class NetworkLayoutManager {
     // Adjust Y positions of hidden layer nodes based on their input spline charts
     for (let layerIdx = 1; layerIdx < numLayers - 1; layerIdx++) {
       // Calculate spline positions for this layer
-      const splinePositions = this.calculateSplinePositions(network, layerIdx, node2coord, inputIds);
+      const splinePositions = this.calculateSplinePositions(network, layerIdx, node2coord, inputIds, columnCounts, maxColumnCount);
       
       // For each node in the hidden layer, calculate mean Y of input splines
       const layerNodes = network[layerIdx];
@@ -225,10 +322,10 @@ export class NetworkLayoutManager {
   /**
    * Calculate center position for a node
    */
-  getNodePosition(nodeIndex: number, cx: number): NodePosition {
+  getNodePosition(nodeIndex: number, cx: number, yOffset: number = 0): NodePosition {
     return {
       cx: cx,
-      cy: this.nodeIndexScale(nodeIndex) + this.rectSize / 2
+      cy: this.nodeIndexScale(nodeIndex) + this.rectSize / 2 + yOffset
     };
   }
 
@@ -298,25 +395,33 @@ export class NetworkLayoutManager {
     network: kan.KANNode[][],
     layerIdx: number,
     node2coord: {[id: string]: NodePosition},
-    inputIds: string[]
+    inputIds: string[],
+    columnCounts?: number[],
+    maxColumnCount?: number
   ): {[edgeKey: string]: SplinePosition} {
     let sortedEdges = this.sortEdges(network, layerIdx, node2coord, inputIds);
     let positions: {[edgeKey: string]: SplinePosition} = {};
+    
+    // Calculate vertical offset for spline chart column
+    let splineOffset = 0;
+    if (columnCounts && maxColumnCount) {
+      const splineColumnIdx = layerIdx * 2 - 1;
+      const splineColumnCount = columnCounts[splineColumnIdx];
+      splineOffset = ((maxColumnCount - splineColumnCount) * (this.rectSize + this.spacing)) / 2;
+    }
+
+    // Calculate the number of layers to determine column positioning
+    const numLayers = network.length;
+    const totalColumns = this.calculateTotalColumns(numLayers);
+    const splineColIdx = this.splineColumnIndex(layerIdx);
+    const splineX = this.calculateColumnX(splineColIdx, totalColumns);
 
     sortedEdges.forEach((edgeInfo, index) => {
-      let sourceCoord = node2coord[edgeInfo.edge.sourceNode.id];
-      let destCoord = node2coord[edgeInfo.edge.destNode.id];
+      // X position: use dedicated column position for uniform spacing
+      // (no longer calculating midpoint between nodes)
 
-      // X position: midpoint between source and destination
-      let splineX = (sourceCoord.cx + destCoord.cx) / 2;
-
-      // Y position: aligned with grid system
-      let splineY = this.nodeIndexScale(index) + this.rectSize / 2;
-
-      // Constrain X within SVG bounds
-      let minX = this.padding + this.splineChartWidth / 2;
-      let maxX = this.svgWidth - this.padding - this.splineChartWidth / 2;
-      splineX = Math.max(minX, Math.min(maxX, splineX));
+      // Y position: aligned with grid system, with offset for centering
+      let splineY = this.nodeIndexScale(index) + this.rectSize / 2 + splineOffset;
 
       positions[edgeInfo.edgeKey] = {
         x: splineX,
@@ -439,10 +544,12 @@ export class NetworkLayoutManager {
 
   /**
    * Calculate the maximum height needed for the SVG based on network structure
+   * Also accounts for centered input column potentially extending beyond bottom
    */
   calculateRequiredHeight(
     network: kan.KANNode[][],
-    numInputs: number
+    numInputs: number,
+    inputIds?: string[]
   ): number {
     // Calculate the maximum number of edges in any single layer
     let maxEdgesInLayer = 0;
@@ -453,18 +560,51 @@ export class NetworkLayoutManager {
     }
     let maxYForEdges = this.nodeIndexScale(maxEdgesInLayer);
 
-    // Calculate height needed for input nodes
+    // Calculate height needed for input nodes (uncentered)
     let maxYForInputs = this.nodeIndexScale(numInputs);
 
     // Calculate height needed for intermediate layers
     let maxYForLayers = 0;
-    for (let layerIdx = 1; layerIdx < network.length - 1; layerIdx++) {
+    for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
       let numNodes = network[layerIdx].length;
       maxYForLayers = Math.max(maxYForLayers, this.nodeIndexScale(numNodes));
     }
 
-    // Return the maximum with a minimum height
-    return Math.max(maxYForEdges, maxYForInputs, maxYForLayers, 400);
+    // Calculate the maximum column count to determine centering
+    let maxColumnCount = Math.max(maxEdgesInLayer, numInputs);
+    for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
+      maxColumnCount = Math.max(maxColumnCount, network[layerIdx].length);
+    }
+    
+    // Calculate the input column active span to determine its offset when centered
+    let inputColumnActiveSpan = numInputs;
+    if (inputIds && inputIds.length > 0) {
+      const activeInputIds = network[0].map(node => node.id);
+      let firstActiveIdx = -1;
+      let lastActiveIdx = -1;
+      
+      for (let i = 0; i < inputIds.length; i++) {
+        if (activeInputIds.indexOf(inputIds[i]) !== -1) {
+          if (firstActiveIdx === -1) {
+            firstActiveIdx = i;
+          }
+          lastActiveIdx = i;
+        }
+      }
+      
+      if (firstActiveIdx !== -1 && lastActiveIdx !== -1) {
+        inputColumnActiveSpan = lastActiveIdx - firstActiveIdx + 1;
+      }
+    }
+    
+    // When input column is centered based on active span, the offset is:
+    const inputOffset = ((maxColumnCount - inputColumnActiveSpan) * (this.rectSize + this.spacing)) / 2;
+    
+    // The bottom of the last input element (all inputs are drawn) will be at:
+    const inputColumnBottom = inputOffset + this.nodeIndexScale(numInputs);
+    
+    // Ensure SVG height accommodates the potentially extended input column
+    return Math.max(maxYForEdges, maxYForInputs, maxYForLayers, inputColumnBottom, 400);
   }
 
   /**
@@ -474,7 +614,9 @@ export class NetworkLayoutManager {
     network: kan.KANNode[][],
     layerIdx: number,
     node2coord: {[id: string]: NodePosition},
-    inputIds: string[]
+    inputIds: string[],
+    columnCounts?: number[],
+    maxColumnCount?: number
   ): {
     edgeKey: string,
     edge: kan.KANEdge,
@@ -483,7 +625,7 @@ export class NetworkLayoutManager {
     edgeIndex: number,
     totalEdgesForNode: number
   }[] {
-    const splinePositions = this.calculateSplinePositions(network, layerIdx, node2coord, inputIds);
+    const splinePositions = this.calculateSplinePositions(network, layerIdx, node2coord, inputIds, columnCounts, maxColumnCount);
     const edgesLayout: {
       edgeKey: string,
       edge: kan.KANEdge,
@@ -539,10 +681,14 @@ export class NetworkLayoutManager {
   } {
     const { layers, node2coord } = this.getNetworkLayout(network, inputIds);
     const edgesByLayer: {[layerIdx: number]: any[]} = {};
+    
+    // Calculate column counts for centering
+    const columnCounts = this.getColumnElementCounts(network, inputIds.length, inputIds);
+    const maxColumnCount = Math.max(...columnCounts);
 
     // Calculate edge layouts for each layer
     for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
-      edgesByLayer[layerIdx] = this.getLayerEdgesLayout(network, layerIdx, node2coord, inputIds);
+      edgesByLayer[layerIdx] = this.getLayerEdgesLayout(network, layerIdx, node2coord, inputIds, columnCounts, maxColumnCount);
     }
 
     return {
