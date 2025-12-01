@@ -40,7 +40,7 @@ export class LearnableFunction {
   knotVector: number[] = [];
   gridSize: number;
   degree: number;
-  initNoise: number | "xavier" | "kaiming" | "lecun";
+  initNoise: number | "xavier" | "kaiming" | "lecun" | "linear";
   inputRange: [number, number] = [-1, 1];
   private fanIn: number;
   private fanOut: number;
@@ -50,7 +50,7 @@ export class LearnableFunction {
     gridSize: number = 5,
     range: [number, number] = [-1, 1],
     degree: number = 3,
-    initNoise: number | "xavier" | "kaiming" | "lecun" = 0.3,
+    initNoise: number | "xavier" | "kaiming" | "lecun" | "linear" = 0.3,
     fanIn: number = 1,
     fanOut: number = 1
   ) {
@@ -96,6 +96,26 @@ export class LearnableFunction {
 
     const randUniform = (a: number, b: number) => a + (b - a) * Math.random();
 
+    if (this.initNoise === "linear") {
+      // Linear initialization: creates identity function or negative identity function
+      // Uses Kaiming/He initialization to determine the scale: U(-sqrt(6/fanIn), sqrt(6/fanIn))
+      const safeFanIn = Math.max(1, this.fanIn | 0);
+      const safeFanOut = Math.max(1, this.fanOut | 0);
+      const limit = Math.sqrt(2 / safeFanIn); // He et al. ReLU
+
+      // 50% chance for positive or negative identity
+      const isPositive = Math.random() < 0.5;
+      for (let i = 0; i < numControlPoints; i++) {
+        const t = i / (numControlPoints - 1); // 0 to 1
+        if (isPositive) {
+          this.controlPoints.push(-limit + 2 * limit * t); // -limit to +limit (identity)
+        } else {
+          this.controlPoints.push(limit - 2 * limit * t); // +limit to -limit (negative identity)
+        }
+      }
+      return;
+    }
+
     if (this.initNoise === "xavier" || this.initNoise === "kaiming" || this.initNoise === "lecun") {
       // Xavier/Glorot: U(-sqrt(6/(fanIn+fanOut)), sqrt(6/(fanIn+fanOut)))
       // Kaiming/He:    U(-sqrt(6/fanIn), sqrt(6/fanIn))
@@ -104,7 +124,8 @@ export class LearnableFunction {
       const safeFanOut = Math.max(1, this.fanOut | 0);
       const limit =
         this.initNoise === "xavier" ? Math.sqrt(6 / (safeFanIn + safeFanOut)) :
-        this.initNoise === "kaiming" ? Math.sqrt(6 / safeFanIn) :
+        // this.initNoise === "kaiming" ? Math.sqrt(6 / safeFanIn) :
+        this.initNoise === "kaiming" ? Math.sqrt(2 / safeFanIn) :
         Math.sqrt(3 / safeFanIn); // lecun
 
       for (let i = 0; i < numControlPoints; i++) {
