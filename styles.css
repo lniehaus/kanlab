@@ -727,10 +727,6 @@ g.column rect {
   opacity: 0.3;
 }
 
-#network .node.inactive rect {
-  fill: #e0e0e0;
-}
-
 #network .node.hovered {
   opacity: 1.0;
 }
@@ -763,14 +759,14 @@ g.column rect {
 }
 
 #network .canvas.inactive canvas {
-  box-shadow: inherit;
-}
-
-#network .canvas.inactive canvas {
   opacity: 0.4;
-  border: 0;
-  top: 0;
-  left: 0;
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  border: 2px solid black;
+  border-radius: 3px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+  background-color: #e0e0e0;
 }
 
 #network .canvas.inactive svg {
