@@ -376,6 +376,8 @@ header h1 .optional {
   max-width: 320px;
   top: -20px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  pointer-events: auto;
+  transition: opacity 0.2s ease;
 }
 
 #hovercard input {
@@ -784,7 +786,13 @@ g.column rect {
 
 .spline-chart {
   cursor: pointer;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s, transform 0.15s ease;
+  border-radius: 3px;
+}
+
+.spline-chart:hover {
+  opacity: 1.0 !important;
+  z-index: 15;
 }
 
 .spline-chart.inactive {
@@ -793,6 +801,10 @@ g.column rect {
 
 .spline-chart.inactive svg {
   filter: grayscale(100%);
+}
+
+.spline-chart.inactive:hover svg {
+  filter: grayscale(50%);
 }
 
 /* Hidden layers column */

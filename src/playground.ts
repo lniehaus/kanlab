@@ -872,7 +872,7 @@ function drawLinkWithSplineChart(
   let splineX = splinePosition.x;
   let splineY = splinePosition.y;
   
-  // Create spline chart div
+  // Create spline chart div with larger hover target
   let splineDiv = d3.select("#network").append("div")
     .attr("class", "spline-chart")
     .attr("id", `spline-${edgeId}`)
@@ -883,7 +883,11 @@ function drawLinkWithSplineChart(
       width: `${SPLINE_CHART_SIZE_X}px`,
       height: `${SPLINE_CHART_SIZE_Y}px`,
       "z-index": "10",
-      "pointer-events": "auto"
+      "pointer-events": "auto",
+      "padding": "5px", // Increase hover target area
+      "margin": "-5px", // Compensate for padding to maintain visual position
+      "cursor": "pointer",
+      "transition": "transform 0.15s ease, opacity 0.15s ease"
     });
 
   // Create spline chart
@@ -964,13 +968,22 @@ function drawLinkWithSplineChart(
 
   // Add hover functionality to spline chart div
   splineDiv.on("mouseenter", function() {
+    // Visual feedback on hover
+    d3.select(this)
+      .style("transform", "scale(1.1)")
+      .style("opacity", "1.0");
+    
     updateHoverCard(HoverType.WEIGHT, edge, [splineX, splineY]);
   }).on("mouseleave", function() {
+    // Reset visual feedback
+    d3.select(this)
+      .style("transform", "scale(1.0)")
+      .style("opacity", null);
     // Don't hide if user is dragging a control point
     if (isDraggingControlPoint) {
       return;
     }
-    // Delay hiding to allow mouse to move to hovercard
+    // Longer delay to allow smooth mouse movement to hovercard
     hoverCardHideTimeout = setTimeout(() => {
       updateHoverCard(null);
     }, 100);
@@ -978,6 +991,12 @@ function drawLinkWithSplineChart(
     // Track cursor position
     const event = d3.event as MouseEvent;
     lastMousePosition = {x: event.pageX, y: event.pageY};
+    
+    // Cancel hide timeout if mouse is still moving over the spline chart
+    if (hoverCardHideTimeout !== null) {
+      clearTimeout(hoverCardHideTimeout);
+      hoverCardHideTimeout = null;
+    }
   });
 
   // Draw first link: source node to spline chart
@@ -1416,26 +1435,37 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
   // Position the hover card below the spline chart
   let finalX, finalY;
   
+  // Get scroll position for accurate positioning
+  const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
+  const scrollY = window.pageYOffset || document.documentElement.scrollTop;
+  
   // For weight hover cards, position below the spline chart
   // Center the hover card horizontally relative to the spline chart
   finalX = coordinates[0] - 150; // Center 300px hover card around spline chart
-  finalY = coordinates[1] + (SPLINE_CHART_SIZE_Y / 2) + 10; // Position below spline chart with 10px gap
+  finalY = coordinates[1] + (SPLINE_CHART_SIZE_Y / 2) + 15; // Position below spline chart with 15px gap
   
-  // Ensure hover card stays within viewport bounds
+  // Ensure hover card stays within viewport bounds (accounting for scroll)
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  
   // Prevent going off left edge
-  if (finalX < 10) {
-    finalX = 10;
+  if (finalX - scrollX < 10) {
+    finalX = scrollX + 10;
   }
   
   // Prevent going off right edge (300px hover card width + padding)
-  if (finalX + 310 > window.innerWidth) {
-    finalX = window.innerWidth - 310;
+  if (finalX - scrollX + 310 > viewportWidth) {
+    finalX = scrollX + viewportWidth - 310;
   }
   
-  // Prevent going off bottom edge (200px hover card height + padding)
-  if (finalY + 210 > window.innerHeight) {
+  // Prevent going off bottom edge (estimated 350px hover card height + padding)
+  if (finalY - scrollY + 350 > viewportHeight) {
     // If no room below, position above the spline chart
-    finalY = coordinates[1] - (SPLINE_CHART_SIZE_Y / 2) - 210;
+    finalY = coordinates[1] - (SPLINE_CHART_SIZE_Y / 2) - 360;
+    // Ensure it doesn't go off the top
+    if (finalY - scrollY < 10) {
+      finalY = scrollY + 10;
+    }
   }
   
   hovercard.style({
@@ -1651,6 +1681,42 @@ hovercardElement.addEventListener("mouseleave", function() {
   }
   // Hide the hovercard when mouse leaves it
   updateHoverCard(null);
+});
+
+// Global event handlers for improved interaction
+// Reset drag state on mouse up anywhere (failsafe)
+document.addEventListener("mouseup", function() {
+  if (isDraggingControlPoint) {
+    isDraggingControlPoint = false;
+  }
+});
+
+// Close hovercard on ESC key
+document.addEventListener("keydown", function(event: KeyboardEvent) {
+  if (event.key === "Escape" || event.keyCode === 27) {
+    updateHoverCard(null);
+  }
+});
+
+// Close hovercard when clicking outside (but not on spline charts or hovercard itself)
+document.addEventListener("click", function(event: MouseEvent) {
+  const target = event.target as HTMLElement;
+  
+  // Check if click is on hovercard or its children
+  if (hovercardElement.contains(target)) {
+    return;
+  }
+  
+  // Check if click is on a spline chart
+  const splineChart = target.closest('.spline-chart');
+  if (splineChart) {
+    return;
+  }
+  
+  // Otherwise, hide the hovercard
+  if (hovercardElement.style.display !== "none") {
+    updateHoverCard(null);
+  }
 });
 
 generateData(true);
