@@ -500,8 +500,14 @@ function updateWeightsUI(network: kan.KANNode[][], container) {
         let normalizedInputStd = Math.min(1, inputStd / inputStdBoundary);
         let normalizedOutputStd = Math.min(1, outputStd / outputStdBoundary);
         
-        // If edge is inactive, make links very faint
-        const opacity = edge.isActive ? 1.0 : 0.2;
+        // Calculate opacity based on edge and node active states
+        let opacity = 1.0;
+        if (!edge.isActive) {
+          opacity = 0.2;
+        } else if (!edge.sourceNode.isActive || !edge.destNode.isActive) {
+          // Also reduce opacity if either connected node is inactive
+          opacity = 0.2;
+        }
         
         // Update the first link (source to spline chart) - use input activation std
         container.select(`#link${edgeId}-part1`)
@@ -621,6 +627,8 @@ function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
       heatMap.updateBackground(boundary[kan.getKANOutputNode(network).id],
           state.discretize);
     });
+  
+  // Add click handlers
   if (isInput) {
     div.on("click", function() {
       state[nodeId] = !state[nodeId];
@@ -628,10 +636,57 @@ function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
       reset();
     });
     div.style("cursor", "pointer");
+  } else if (!isOutput && node) {
+    // Hidden layer nodes can be activated/deactivated
+    div.on("click", function() {
+      node.isActive = !node.isActive;
+      div.classed("inactive", !node.isActive);
+      nodeGroup.classed("inactive", !node.isActive);
+      
+      // Reset histograms for ALL edges in the network
+      for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
+        let currentLayer = network[layerIdx];
+        for (let i = 0; i < currentLayer.length; i++) {
+          let n = currentLayer[i];
+          for (let j = 0; j < n.inputEdges.length; j++) {
+            n.inputEdges[j].resetHistogram();
+          }
+        }
+      }
+      
+      // Repopulate histograms with current network state
+      trainData.forEach((point) => {
+        let input = constructInput(point.x, point.y);
+        kan.kanForwardProp(network, input, true);
+      });
+      
+      // Update visualizations
+      updateWeightsUI(network, d3.select("g.core"));
+      updateDecisionBoundary(network, false);
+      
+      let selectedId = selectedNodeId != null ?
+          selectedNodeId : kan.getKANOutputNode(network).id;
+      heatMap.updateBackground(boundary[selectedId], state.discretize);
+      
+      d3.select("#network").selectAll("div.canvas")
+          .each(function(data: {heatmap: HeatMap, id: string}) {
+        data.heatmap.updateBackground(reduceMatrix(boundary[data.id], 10),
+            state.discretize);
+      });
+    });
+    div.style("cursor", "pointer");
   }
+  
   if (isInput) {
     div.classed(activeOrNotClass, true);
   }
+  
+  // Apply initial active/inactive styling for hidden nodes
+  if (!isInput && !isOutput && node) {
+    div.classed("inactive", !node.isActive);
+    nodeGroup.classed("inactive", !node.isActive);
+  }
+  
   let nodeHeatMap = new HeatMap(RECT_SIZE, DENSITY / 10, xDomain,
       xDomain, div, {noSvg: true});
   div.datum({heatmap: nodeHeatMap, id: nodeId});

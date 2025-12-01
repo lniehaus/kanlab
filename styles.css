@@ -724,7 +724,11 @@ g.column rect {
 }
 
 #network .node.inactive {
-  opacity: 0.5;
+  opacity: 0.3;
+}
+
+#network .node.inactive rect {
+  fill: #e0e0e0;
 }
 
 #network .node.hovered {
@@ -767,6 +771,10 @@ g.column rect {
   border: 0;
   top: 0;
   left: 0;
+}
+
+#network .canvas.inactive svg {
+  opacity: 0.4;
 }
 
 #network .canvas.hovered canvas {

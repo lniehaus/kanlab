@@ -537,6 +537,8 @@ export class KANNode {
   output: number = 0;
   /** Error derivative with respect to this node's output */
   outputDer: number = 0;
+  /** Whether this node is active */
+  isActive: boolean = true;
 
   constructor(id: string) {
     this.id = id;
@@ -544,6 +546,12 @@ export class KANNode {
 
   /** Forward pass: sum all edge outputs */
   forward(recordHistogram: boolean = true): number {
+    // If node is deactivated, output is 0
+    if (!this.isActive) {
+      this.output = 0;
+      return 0;
+    }
+    
     this.output = 0;
     for (const edge of this.inputEdges) {
       this.output += edge.forward(edge.sourceNode.output, recordHistogram);
@@ -553,6 +561,11 @@ export class KANNode {
 
   /** Backward pass: distribute gradients to input edges */
   backward(): void {
+    // Don't backpropagate if node is inactive
+    if (!this.isActive) {
+      return;
+    }
+    
     for (const edge of this.inputEdges) {
       const inputGrad = this.outputDer * edge.learnableFunction.derivative(edge.lastInput);
       edge.accumulateGradients(this.outputDer);
