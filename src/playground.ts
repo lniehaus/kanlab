@@ -1369,13 +1369,22 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
     
     // Set callback to update the main network visualization when control points change
     hoverCardSplineChart.setOnControlPointChange((index: number, newValue: number) => {
+      // Clear the histogram since the spline function has changed
+      edge.resetHistogram();
+      
+      // Run forward passes with training data to repopulate histograms
+      trainData.forEach((point) => {
+        let input = constructInput(point.x, point.y);
+        kan.kanForwardProp(network, input);
+      });
+      
       // Only update the edge visualization immediately (lightweight)
       let edgeId = `${edge.sourceNode.id}-${edge.destNode.id}`;
       if (edgeSplineCharts[edgeId]) {
         edgeSplineCharts[edgeId].updateFunction(edge.learnableFunction);
       }
       
-      // Update the hovercard's histogram display to reflect current activations
+      // Update the hovercard's histogram display with fresh activation data
       const inputHistogramData = edge.getNormalizedHistogram();
       const outputHistogramData = edge.getNormalizedOutputHistogram();
       hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData);
