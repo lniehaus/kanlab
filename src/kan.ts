@@ -269,6 +269,7 @@ export class KANEdge {
   lastInput: number = 0;
   accGradients: number[] = [];
   numAccumulatedGrads: number = 0;
+  isActive: boolean = true;
   
   // Histogram tracking for activation visualization
   activationHistogram: number[] = [];
@@ -313,6 +314,12 @@ export class KANEdge {
   /** Forward pass through the edge */
   forward(input: number, recordHistogram: boolean = true): number {
     this.lastInput = input;
+    
+    // If edge is deactivated, return 0
+    if (!this.isActive) {
+      return 0;
+    }
+    
     if (recordHistogram) {
       this.recordActivation(input);
     }
@@ -460,6 +467,11 @@ export class KANEdge {
 
   /** Accumulate gradients for parameter updates */
   accumulateGradients(outputGradient: number): void {
+    // Don't accumulate gradients if edge is inactive
+    if (!this.isActive) {
+      return;
+    }
+    
     // Get gradients with respect to control points
     const controlPointGradients = this.learnableFunction.getControlPointGradients(this.lastInput);
     
@@ -473,6 +485,11 @@ export class KANEdge {
 
   /** Update parameters using accumulated gradients */
   updateParameters(learningRate: number): void {
+    // Don't update parameters if edge is inactive
+    if (!this.isActive) {
+      return;
+    }
+    
     if (this.numAccumulatedGrads > 0) {
       const avgGradients = this.accGradients.map(g => g / this.numAccumulatedGrads);
       this.learnableFunction.updateParameters(avgGradients, learningRate);

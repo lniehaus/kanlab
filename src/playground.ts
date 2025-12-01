@@ -500,12 +500,16 @@ function updateWeightsUI(network: kan.KANNode[][], container) {
         let normalizedInputStd = Math.min(1, inputStd / inputStdBoundary);
         let normalizedOutputStd = Math.min(1, outputStd / outputStdBoundary);
         
+        // If edge is inactive, make links very faint
+        const opacity = edge.isActive ? 1.0 : 0.2;
+        
         // Update the first link (source to spline chart) - use input activation std
         container.select(`#link${edgeId}-part1`)
             .style({
               "stroke-dashoffset": -iter / 3,
               "stroke-width": linkWidthScale(normalizedInputStd),
-              "stroke": linkColorScale(normalizedInputStd)
+              "stroke": linkColorScale(normalizedInputStd),
+              "opacity": opacity
             });
             
         // Update the second link (spline chart to destination) - use output activation std
@@ -513,7 +517,8 @@ function updateWeightsUI(network: kan.KANNode[][], container) {
             .style({
               "stroke-dashoffset": -iter / 3,
               "stroke-width": linkWidthScale(normalizedOutputStd),
-              "stroke": linkColorScale(normalizedOutputStd)
+              "stroke": linkColorScale(normalizedOutputStd),
+              "opacity": opacity
             });
             
         // Update the spline chart
@@ -847,6 +852,49 @@ function drawLinkWithSplineChart(
   
   // Update spline chart with the learnable function
   splineChart.updateFunction(edge.learnableFunction);
+  
+  // Apply initial active/inactive styling
+  splineDiv.classed("inactive", !edge.isActive);
+
+  // Add click handler to toggle active state
+  splineDiv.on("click", function() {
+    edge.isActive = !edge.isActive;
+    splineDiv.classed("inactive", !edge.isActive);
+    
+    // Reset and repopulate histograms with current network state
+    edge.resetHistogram();
+    trainData.forEach((point) => {
+      let input = constructInput(point.x, point.y);
+      kan.kanForwardProp(network, input, true);
+    });
+    
+    // Update visualizations
+    updateWeightsUI(network, d3.select("g.core"));
+    updateDecisionBoundary(network, false);
+    
+    let selectedId = selectedNodeId != null ?
+        selectedNodeId : kan.getKANOutputNode(network).id;
+    heatMap.updateBackground(boundary[selectedId], state.discretize);
+    
+    d3.select("#network").selectAll("div.canvas")
+        .each(function(data: {heatmap: HeatMap, id: string}) {
+      data.heatmap.updateBackground(reduceMatrix(boundary[data.id], 10),
+          state.discretize);
+    });
+    
+    // Update hover card if it's showing this edge
+    if (currentHoverCardEdge === edge && hoverCardSplineChart) {
+      const inputHistogramData = edge.getNormalizedHistogram();
+      const outputHistogramData = edge.getNormalizedOutputHistogram();
+      hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData);
+    }
+    
+    // Prevent event from bubbling to hover handlers
+    const clickEvent = d3.event as Event;
+    if (clickEvent.stopPropagation) {
+      clickEvent.stopPropagation();
+    }
+  });
 
   // Add hover functionality to spline chart div
   splineDiv.on("mouseenter", function() {

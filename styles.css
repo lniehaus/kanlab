@@ -776,6 +776,21 @@ g.column rect {
   left: -2px;
 }
 
+/* Spline charts */
+
+.spline-chart {
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.spline-chart.inactive {
+  opacity: 0.3;
+}
+
+.spline-chart.inactive svg {
+  filter: grayscale(100%);
+}
+
 /* Hidden layers column */
 
 .hidden-layers.column {
