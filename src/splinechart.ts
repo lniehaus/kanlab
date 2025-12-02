@@ -347,6 +347,7 @@ export class SplineChart {
 
   /**
    * Update the chart with a new learnable function
+   * Uses D3's enter/update/exit pattern to preserve DOM elements and event handlers
    */
   updateFunction(learnableFunction: LearnableFunction, inputHistogramData?: number[], outputHistogramData?: number[]): void {
     this.currentFunction = learnableFunction;
@@ -354,39 +355,48 @@ export class SplineChart {
     // Update Y scale based on function range
     this.updateYScale();
     
-    // Clear previous function visualization
-    this.svg.selectAll(".spline-curve").remove();
-    this.svg.selectAll(".control-point").remove();
-    this.svg.selectAll(".knot-line").remove();
-    this.svg.selectAll(".activation-histogram").remove();
-    this.svg.selectAll(".output-histogram").remove();
+    // Use update pattern instead of remove/recreate for better performance
+    // and to preserve event handlers 
     
-    // Clear old control paths only if showOldControlPaths is false
-    if (!this.settings.showOldControlPaths) {
+    // Update histograms FIRST (so they're behind the curve)
+    if (this.settings.showActivationHistogram) {
+      if (inputHistogramData && inputHistogramData.length > 0) {
+        this.updateActivationHistogram(inputHistogramData);
+      } else {
+        // Remove histograms if no data
+        this.svg.selectAll(".activation-histogram").remove();
+      }
+      
+      if (outputHistogramData && outputHistogramData.length > 0) {
+        this.updateOutputHistogram(outputHistogramData);
+      } else {
+        // Remove output histograms if no data
+        this.svg.selectAll(".output-histogram").remove();
+      }
+    } else {
+      // Remove histograms if not enabled
+      this.svg.selectAll(".activation-histogram").remove();
+      this.svg.selectAll(".output-histogram").remove();
+    }
+
+    // Update the spline curve (using transition instead of remove/create)
+    this.updateSplineCurve();
+
+    // Update control points if enabled (using D3 data binding)
+    if (this.settings.showControlPoints) {
+      this.updateControlPoints();
+    } else {
+      // Remove control points if not enabled
+      this.svg.selectAll(".control-point").remove();
       this.svg.selectAll(".control-polygon").remove();
     }
 
-    // Draw histograms FIRST (so they're behind the curve)
-    if (this.settings.showActivationHistogram) {
-      if (inputHistogramData && inputHistogramData.length > 0) {
-        this.drawActivationHistogram(inputHistogramData);
-      }
-      if (outputHistogramData && outputHistogramData.length > 0) {
-        this.drawOutputHistogram(outputHistogramData);
-      }
-    }
-
-    // Draw the spline curve
-    this.drawSplineCurve();
-
-    // Draw control points if enabled
-    if (this.settings.showControlPoints) {
-      this.drawControlPoints();
-    }
-
-    // Draw knots if enabled
+    // Update knots if enabled
     if (this.settings.showKnots) {
-      this.drawKnots();
+      this.updateKnots();
+    } else {
+      // Remove knots if not enabled
+      this.svg.selectAll(".knot-line").remove();
     }
   }
 
@@ -499,6 +509,52 @@ export class SplineChart {
       .style("stroke", "#1B998B")
       .style("stroke-width", 3)
       .style("stroke-linecap", "round");
+  }
+
+  /**
+   * Update spline curve using D3 transitions instead of remove/recreate
+   * This preserves the DOM element and is more performant
+   */
+  private updateSplineCurve(): void {
+    if (!this.currentFunction) return;
+
+    // Generate points along the spline curve
+    const numPoints = 200;
+    const lineData: Array<[number, number]> = [];
+
+    for (let i = 0; i <= numPoints; i++) {
+      const x = -1 + (2 * i) / numPoints;
+      const y = this.currentFunction.evaluate(x);
+      lineData.push([this.xScale(x), this.yScale(y)]);
+    }
+
+    // Create line generator
+    const line = d3.svg.line()
+      .x((d: [number, number]) => d[0])
+      .y((d: [number, number]) => d[1])
+      .interpolate("linear");
+
+    // Use D3 data binding pattern (enter/update/exit)
+    const curve = this.svg.selectAll(".spline-curve")
+      .data([lineData]); // Single element array for single curve
+
+    // ENTER: Create new curve if it doesn't exist
+    curve.enter()
+      .append("path")
+      .attr("class", "spline-curve")
+      .style("fill", "none")
+      .style("stroke", "#1B998B")
+      .style("stroke-width", 3)
+      .style("stroke-linecap", "round");
+
+    // UPDATE: Transition existing curve to new path
+    // Use CSS transform for smooth animation 
+    curve.transition()
+      .duration(50) // Fast transition for training
+      .attr("d", line);
+
+    // EXIT: Remove any extra curves (shouldn't happen, but good practice)
+    curve.exit().remove();
   }
 
   private drawControlPoints(): void {
@@ -641,6 +697,152 @@ export class SplineChart {
     }
   }
 
+  /**
+   * Update control points using D3 data binding pattern 
+   * This preserves DOM elements and event handlers
+   */
+  private updateControlPoints(): void {
+    if (!this.currentFunction) return;
+
+    const controlPoints = this.currentFunction.controlPoints;
+    const numPoints = controlPoints.length;
+
+    // Map control point indices to x positions
+    const controlPointData = controlPoints.map((y, i) => {
+      const x = -1 + (2 * i) / (numPoints - 1);
+      return { x, y, index: i };
+    });
+
+    // Create or update drag behavior if interactive
+    if (this.settings.interactive && !this.dragBehavior) {
+      this.dragBehavior = d3.behavior.drag()
+        .origin((d: any) => {
+          return { x: this.xScale(d.x), y: this.yScale(d.y) };
+        })
+        .on("dragstart", () => {
+          this.isDragging = true;
+          if (this.onDragStart) {
+            this.onDragStart();
+          }
+        })
+        .on("drag", (d: any) => {
+          const event: any = d3.event;
+          const newY = this.yScale.invert(event.y);
+          d.y = newY;
+          
+          if (this.currentFunction) {
+            this.currentFunction.controlPoints[d.index] = newY;
+          }
+          
+          d3.select(event.sourceEvent.target)
+            .attr("cy", event.y);
+          
+          this.redrawCurve();
+          
+          if (this.onControlPointChange) {
+            this.onControlPointChange(d.index, newY);
+          }
+        })
+        .on("dragend", () => {
+          this.isDragging = false;
+          if (this.smoothingTimer) {
+            clearTimeout(this.smoothingTimer);
+            this.smoothingTimer = null;
+          }
+          if (this.targetYDomain) {
+            this.yScale.domain(this.targetYDomain);
+            this.targetYDomain = null;
+            let yAxis = d3.svg.axis()
+              .scale(this.yScale)
+              .orient("left");
+            if (this.settings.showYAxisValues) {
+              yAxis.ticks(5);
+            } else {
+              yAxis.ticks(0);
+            }
+            this.svg.select(".y.axis").call(yAxis);
+          }
+          if (this.onDragEnd) {
+            this.onDragEnd();
+          }
+        });
+    }
+
+    // Use D3 data binding pattern (enter/update/exit)
+    const points = this.svg.selectAll(".control-point")
+      .data(controlPointData, (d: any) => d.index); // Key function for proper data binding
+
+    // ENTER: Create new control points if needed
+    const pointsEnter = points.enter()
+      .append("circle")
+      .attr("class", "control-point")
+      .attr("r", this.settings.interactive ? 6 : 4)
+      .style("fill", "#E67E22")
+      .style("stroke", "#D35400")
+      .style("stroke-width", 2)
+      .style("cursor", this.settings.interactive ? "ns-resize" : "default");
+
+    // Add drag behavior and tooltips to new points
+    if (this.settings.interactive && this.dragBehavior) {
+      pointsEnter.call(this.dragBehavior);
+    }
+    
+    pointsEnter.append("title");
+
+    // UPDATE: Transition existing points to new positions
+    points.transition()
+      .duration(50) // Fast transition for training
+      .attr("cx", (d: any) => this.xScale(d.x))
+      .attr("cy", (d: any) => this.yScale(d.y));
+
+    // Update tooltips
+    points.select("title")
+      .text((d: any) => `Control Point ${d.index}\nPosition: (${d.x.toFixed(2)}, ${d.y.toFixed(3)})${this.settings.interactive ? '\nDrag to adjust' : ''}`);
+
+    // EXIT: Remove extra control points
+    points.exit().remove();
+
+    // Update control polygon
+    this.updateControlPolygon(controlPointData);
+  }
+
+  /**
+   * Update control polygon connecting control points
+   */
+  private updateControlPolygon(controlPointData: any[]): void {
+    if (controlPointData.length <= 1) {
+      this.svg.selectAll(".control-polygon").remove();
+      return;
+    }
+
+    const controlLine = d3.svg.line()
+      .x((d: any) => this.xScale(d.x))
+      .y((d: any) => this.yScale(d.y))
+      .interpolate("linear");
+
+    // Use D3 data binding for control polygon
+    const polygon = this.svg.selectAll(".control-polygon")
+      .data([controlPointData]); // Single polygon
+
+    // ENTER: Create new polygon if needed
+    polygon.enter()
+      .append("path")
+      .attr("class", "control-polygon")
+      .style("fill", "none")
+      .style("stroke", "#E67E22")
+      .style("stroke-width", 1)
+      .style("stroke-dasharray", "5,5")
+      .style("opacity", 0.5);
+
+    // UPDATE: Transition to new path
+    polygon.transition()
+      .duration(50)
+      .attr("d", controlLine);
+
+    // EXIT: Remove extra polygons
+    polygon.exit().remove();
+  }
+
   private drawKnots(): void {
     if (!this.currentFunction) return;
 
@@ -669,6 +871,51 @@ export class SplineChart {
       .style("opacity", 0.7)
       .append("title")
       .text((d: number) => `Knot at x = ${d.toFixed(3)}`);
+  }
+
+  /**
+   * Update knots using D3 data binding
+   */
+  private updateKnots(): void {
+    if (!this.currentFunction) return;
+
+    const knots = this.currentFunction.knotVector;
+    const degree = this.currentFunction.degree;
+
+    // Filter out repeated knots at boundaries
+    const uniqueKnots = knots.filter((knot, i) => {
+      return i > degree && i < knots.length - degree - 1;
+    });
+
+    // Use D3 data binding for knot lines
+    const knotLines = this.svg.selectAll(".knot-line")
+      .data(uniqueKnots);
+
+    // ENTER: Create new knot lines
+    const knotLinesEnter = knotLines.enter()
+      .append("line")
+      .attr("class", "knot-line")
+      .attr("y1", 0)
+      .attr("y2", this.height)
+      .style("stroke", "#9C27B0")
+      .style("stroke-width", 2)
+      .style("stroke-dasharray", "3,3")
+      .style("opacity", 0.7);
+
+    knotLinesEnter.append("title");
+
+    // UPDATE: Transition knot lines to new positions
+    knotLines.transition()
+      .duration(50)
+      .attr("x1", (d: number) => this.xScale(d))
+      .attr("x2", (d: number) => this.xScale(d));
+
+    // Update tooltips
+    knotLines.select("title")
+      .text((d: number) => `Knot at x = ${d.toFixed(3)}`);
+
+    // EXIT: Remove extra knot lines
+    knotLines.exit().remove();
   }
 
   /**
@@ -714,6 +961,64 @@ export class SplineChart {
   }
 
   /**
+   * Update activation histogram using D3 data binding
+   */
+  private updateActivationHistogram(histogramData: number[]): void {
+    if (!histogramData || histogramData.length === 0) {
+      this.svg.selectAll(".activation-histogram").remove();
+      return;
+    }
+    
+    const numBins = histogramData.length;
+    const histogramHeight = this.settings.histogramSize || 50;
+    const histogramGap = this.settings.histogramGap || 10;
+    
+    const xMin = -1;
+    const xMax = 1;
+    const binWidth = (xMax - xMin) / numBins;
+    
+    // Use D3 data binding for histogram group
+    let histogramGroup = this.svg.selectAll(".activation-histogram")
+      .data([histogramData]); // Single histogram group
+    
+    // ENTER: Create histogram group if it doesn't exist
+    histogramGroup.enter()
+      .append("g")
+      .attr("class", "activation-histogram")
+      .attr("transform", `translate(0, ${-histogramHeight - histogramGap})`);
+    
+    // Update bars using data binding
+    const bars = histogramGroup.selectAll("rect.histogram-bar")
+      .data((d: number[]) => d);
+    
+    // ENTER: Create new bars
+    bars.enter()
+      .append("rect")
+      .attr("class", "histogram-bar")
+      .style("fill", this.settings.histogramColor || "#4A90E2")
+      .style("opacity", this.settings.histogramOpacity || 0.3)
+      .style("pointer-events", "none");
+    
+    // UPDATE: Transition bars to new values
+    bars.transition()
+      .duration(50)
+      .attr("x", (d: number, i: number) => {
+        const binStart = xMin + i * binWidth;
+        return this.xScale(binStart);
+      })
+      .attr("y", (d: number) => histogramHeight - (d * histogramHeight))
+      .attr("width", (d: number, i: number) => {
+        const binStart = xMin + i * binWidth;
+        const binEnd = xMin + (i + 1) * binWidth;
+        return Math.max(1, this.xScale(binEnd) - this.xScale(binStart) - 1);
+      })
+      .attr("height", (d: number) => d * histogramHeight);
+    
+    // EXIT: Remove extra bars
+    bars.exit().remove();
+  }
+
+  /**
    * Draw output histogram as semi-transparent bars on the right side (Seaborn joint plot style)
    */
   private drawOutputHistogram(histogramData: number[]): void {
@@ -754,6 +1059,65 @@ export class SplineChart {
       .style("fill", this.settings.outputHistogramColor || "#E24A90")
       .style("opacity", this.settings.histogramOpacity || 0.3)
       .style("pointer-events", "none");
+  }
+
+  /**
+   * Update output histogram using D3 data binding
+   */
+  private updateOutputHistogram(histogramData: number[]): void {
+    if (!histogramData || histogramData.length === 0) {
+      this.svg.selectAll(".output-histogram").remove();
+      return;
+    }
+    
+    const numBins = histogramData.length;
+    const histogramWidth = this.settings.histogramSize || 50;
+    const histogramGap = this.settings.histogramGap || 10;
+    
+    const yMin = -2;
+    const yMax = 2;
+    const binHeight = (yMax - yMin) / numBins;
+    
+    // Use D3 data binding for histogram group
+    let histogramGroup = this.svg.selectAll(".output-histogram")
+      .data([histogramData]); // Single histogram group
+    
+    // ENTER: Create histogram group if it doesn't exist
+    histogramGroup.enter()
+      .append("g")
+      .attr("class", "output-histogram")
+      .attr("transform", `translate(${this.width + histogramGap}, 0)`);
+    
+    // Update bars using data binding
+    const bars = histogramGroup.selectAll("rect.output-histogram-bar")
+      .data((d: number[]) => d);
+    
+    // ENTER: Create new bars
+    bars.enter()
+      .append("rect")
+      .attr("class", "output-histogram-bar")
+      .attr("x", 0)
+      .style("fill", this.settings.outputHistogramColor || "#E24A90")
+      .style("opacity", this.settings.histogramOpacity || 0.3)
+      .style("pointer-events", "none");
+    
+    // UPDATE: Transition bars to new values
+    bars.transition()
+      .duration(50)
+      .attr("y", (d: number, i: number) => {
+        const binStart = yMin + i * binHeight;
+        const binEnd = yMin + (i + 1) * binHeight;
+        return this.yScale(binEnd);
+      })
+      .attr("width", (d: number) => d * histogramWidth)
+      .attr("height", (d: number, i: number) => {
+        const binStart = yMin + i * binHeight;
+        const binEnd = yMin + (i + 1) * binHeight;
+        return Math.max(1, Math.abs(this.yScale(binStart) - this.yScale(binEnd)) - 1);
+      });
+    
+    // EXIT: Remove extra bars
+    bars.exit().remove();
   }
 
   /**
@@ -837,17 +1201,16 @@ export class SplineChart {
   /**
    * Redraw only the spline curve and control polygon (used during drag)
    */
+  /**
+   * Redraw curve during drag (optimized with update pattern)
+   */
   private redrawCurve(): void {
     if (!this.currentFunction) return;
 
-    // Remove old curve and control polygon
-    this.svg.selectAll(".spline-curve").remove();
-    this.svg.selectAll(".control-polygon").remove();
+    // Use update methods instead of remove/recreate
+    this.updateSplineCurve();
 
-    // Redraw spline curve
-    this.drawSplineCurve();
-
-    // Redraw control polygon
+    // Update control polygon
     const controlPoints = this.currentFunction.controlPoints;
     const numPoints = controlPoints.length;
     const controlPointData = controlPoints.map((y, i) => {
@@ -855,22 +1218,7 @@ export class SplineChart {
       return { x, y, index: i };
     });
 
-    if (controlPointData.length > 1) {
-      const controlLine = d3.svg.line()
-        .x((d: any) => this.xScale(d.x))
-        .y((d: any) => this.yScale(d.y))
-        .interpolate("linear");
-
-      this.svg.append("path")
-        .datum(controlPointData)
-        .attr("class", "control-polygon")
-        .attr("d", controlLine)
-        .style("fill", "none")
-        .style("stroke", "#E67E22")
-        .style("stroke-width", 1)
-        .style("stroke-dasharray", "5,5")
-        .style("opacity", 0.5);
-    }
+    this.updateControlPolygon(controlPointData);
   }
 
   /**

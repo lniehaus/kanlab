@@ -162,6 +162,13 @@ class Player {
     if (this.callback) {
       this.callback(this.isPlaying);
     }
+    
+    // Clear any pending debounced updates when pausing
+    if (updateWeightsDebounceTimer !== null) {
+      clearTimeout(updateWeightsDebounceTimer);
+      updateWeightsDebounceTimer = null;
+      updateWeightsPending = false;
+    }
   }
 
   private start(localTimerIndex: number) {
@@ -236,6 +243,10 @@ let hoverCardHideTimeout: number = null;
 let isDraggingControlPoint: boolean = false;
 // Track cursor position during interactions
 let lastMousePosition: {x: number, y: number} = {x: 0, y: 0};
+// Debounce timer for updateWeightsUI to prevent excessive DOM manipulation
+let updateWeightsDebounceTimer: number | null = null;
+// Flag to track if an update is pending
+let updateWeightsPending: boolean = false;
 
 function makeGUI() {
   d3.select("#reset-button").on("click", () => {
@@ -479,7 +490,28 @@ function makeGUI() {
   }
 }
 
-function updateWeightsUI(network: kan.KANNode[][], container) {
+function updateWeightsUI(network: kan.KANNode[][], container, forceUpdate: boolean = false) {
+  // Debounce DOM updates to prevent excessive manipulation during training
+  // This significantly improves event handling reliability (click, mouseleave)
+  if (!forceUpdate) {
+    if (updateWeightsDebounceTimer !== null) {
+      // An update is already scheduled, mark that another update is needed
+      updateWeightsPending = true;
+      return;
+    }
+    
+    // Schedule the update with a delay (~60 FPS limit)
+    updateWeightsDebounceTimer = window.setTimeout(() => {
+      updateWeightsDebounceTimer = null;
+      
+      // If another update was requested while waiting, perform it now
+      if (updateWeightsPending) {
+        updateWeightsPending = false;
+        updateWeightsUI(network, container, false);
+      }
+    }, 16); // 16ms = ~60 FPS
+  }
+  
   // Use fixed boundaries for activation std (reasonable values based on typical activation ranges)
   const inputStdBoundary = 0.6;  // 0.6 is Typical std for inputs in [-1, 1] range
   const outputStdBoundary = 0.6; // 0.6 is Typical std for outputs in [-1, 1] range
@@ -660,8 +692,8 @@ function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
         kan.kanForwardProp(network, input, true);
       });
       
-      // Update visualizations
-      updateWeightsUI(network, d3.select("g.core"));
+      // Update visualizations (forced because this is a user interaction)
+      updateWeightsUI(network, d3.select("g.core"), true);
       updateDecisionBoundary(network, false);
       
       let selectedId = selectedNodeId != null ?
@@ -938,8 +970,8 @@ function drawLinkWithSplineChart(
       kan.kanForwardProp(network, input, true);
     });
     
-    // Update visualizations
-    updateWeightsUI(network, d3.select("g.core"));
+    // Update visualizations (forced because this is a user interaction)
+    updateWeightsUI(network, d3.select("g.core"), true);
     updateDecisionBoundary(network, false);
     
     let selectedId = selectedNodeId != null ?
@@ -1133,8 +1165,8 @@ function getLoss(network: kan.KANNode[][], dataPoints: Example2D[]): number {
 }
 
 function updateUI(firstStep = false) {
-  // Update the links visually.
-  updateWeightsUI(network, d3.select("g.core"));
+  // Update the links visually (debounced during training for better performance)
+  updateWeightsUI(network, d3.select("g.core"), false);
   // Get the decision boundary of the network.
   updateDecisionBoundary(network, firstStep);
   let selectedId = selectedNodeId != null ?
@@ -1228,6 +1260,13 @@ function reset(onStartup=false) {
     userHasInteracted();
   }
   player.pause();
+  
+  // Clear any pending debounced updates
+  if (updateWeightsDebounceTimer !== null) {
+    clearTimeout(updateWeightsDebounceTimer);
+    updateWeightsDebounceTimer = null;
+    updateWeightsPending = false;
+  }
 
   let suffix = state.numHiddenLayers !== 1 ? "s" : "";
   d3.select("#layers-label").text("Hidden layer" + suffix);
@@ -1571,8 +1610,8 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
     hoverCardSplineChart.setOnDragEnd(() => {
       isDraggingControlPoint = false;
       
-      // NOW update expensive visualizations after drag is complete
-      updateWeightsUI(network, d3.select("g.core"));
+      // NOW update expensive visualizations after drag is complete (forced because this is a user interaction)
+      updateWeightsUI(network, d3.select("g.core"), true);
       updateDecisionBoundary(network, false);
       
       // Update the main heatmap
