@@ -247,36 +247,14 @@ export class SplineChart {
       this.chartContainer.style({
         "border": "2px solid black",
         "border-radius": "3px",
-        "box-shadow": "0 2px 5px rgba(0,0,0,0.2)",
-        "transition": "all 0.2s ease"
+        "box-shadow": "0 2px 5px rgba(0,0,0,0.2)"
       });
-      
-      // Add hover effects
-      this.chartContainer
-        .on("mouseenter", function() {
-          d3.select(this).style({
-            "opacity": "1.0",
-            "border": "2px solid #666"
-          });
-        })
-        .on("mouseleave", function() {
-          d3.select(this).style({
-            "opacity": null,
-            "border": "2px solid black"
-          });
-        });
     } else {
       this.chartContainer.style({
         "border": "none",
         "border-radius": "0",
-        "box-shadow": "none",
-        "transition": null
+        "box-shadow": "none"
       });
-      
-      // Remove hover effects
-      this.chartContainer
-        .on("mouseenter", null)
-        .on("mouseleave", null);
     }
   }
 

@@ -408,6 +408,20 @@ header h1 .optional {
   opacity: 0.8;
 }
 
+/* Spline chart hover effects - using CSS classes prevents event blocking during training */
+.spline-chart {
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.spline-chart.spline-hovered {
+  transform: scale(1.1);
+  opacity: 1.0;
+}
+
+.spline-chart.spline-hovered .spline-chart-wrapper {
+  border-color: #666;
+}
+
 /* Main Part*/
 
 #main-part {
@@ -790,10 +804,7 @@ g.column rect {
   border-radius: 3px;
 }
 
-.spline-chart:hover {
-  opacity: 1.0 !important;
-  z-index: 15;
-}
+/* Removed .spline-chart:hover - conflicts with JS hover handlers during DOM manipulation */
 
 .spline-chart.inactive {
   opacity: 0.3;
@@ -803,7 +814,8 @@ g.column rect {
   filter: grayscale(100%);
 }
 
-.spline-chart.inactive:hover svg {
+/* Allow hover on inactive splines to show preview */
+.spline-chart.inactive.spline-hovered svg {
   filter: grayscale(50%);
 }
 

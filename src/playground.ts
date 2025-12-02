@@ -966,19 +966,20 @@ function drawLinkWithSplineChart(
     }
   });
 
-  // Add hover functionality to spline chart div
+  // Add hover functionality to spline chart div (single source of hover state)
   splineDiv.on("mouseenter", function() {
-    // Visual feedback on hover
+    // Visual feedback on hover using CSS class (prevents event queue blocking)
     d3.select(this)
-      .style("transform", "scale(1.1)")
-      .style("opacity", "1.0");
+      .classed("spline-hovered", true)
+      .style("z-index", "15"); // Elevate z-index on hover
     
     updateHoverCard(HoverType.WEIGHT, edge, [splineX, splineY]);
   }).on("mouseleave", function() {
-    // Reset visual feedback
+    // Reset visual feedback using CSS class
     d3.select(this)
-      .style("transform", "scale(1.0)")
-      .style("opacity", null);
+      .classed("spline-hovered", false)
+      .style("z-index", "10"); // Reset z-index
+    
     // Don't hide if user is dragging a control point
     if (isDraggingControlPoint) {
       return;
