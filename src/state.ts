@@ -95,6 +95,7 @@ export class State {
     { name: "regDataset", type: Type.OBJECT, keyMap: regDatasets },
     { name: "symbolicExpression", type: Type.STRING },
     { name: "symbolicLibrarySelection", type: Type.ARRAY_STRING },
+    { name: "symbolicCompositionExpanded", type: Type.BOOLEAN },
     { name: "learningRate", type: Type.NUMBER },
     { name: "noise", type: Type.NUMBER },
     { name: "networkShape", type: Type.ARRAY_NUMBER },
@@ -152,6 +153,7 @@ export class State {
   regDataset: dataset.DataGenerator = dataset.regressPlane;
   symbolicExpression = "sin(PI * x1)";
   symbolicLibrarySelection: string[] = ["x", "sin"];
+  symbolicCompositionExpanded = true;
   seed: string;
 
   /**

@@ -273,6 +273,26 @@ limitations under the License.
             </div>
           </div>
         </div>
+        <div id="symbolic-composition-panel" class="symbolic-composition-panel">
+          <div class="symbolic-composition-header">
+            <h5>Symbolic Composition</h5>
+            <button type="button" id="symbolic-composition-toggle" class="symbolic-composition-toggle"
+              aria-expanded="true">
+              <span class="symbolic-composition-toggle-icon"></span>
+              <span class="symbolic-composition-toggle-label">Hide</span>
+            </button>
+          </div>
+          <div class="symbolic-composition-body">
+            <div id="symbolic-composition-empty" class="symbolic-composition-empty">
+              Select library functions to inspect how the splines assemble an expression.
+            </div>
+            <div class="symbolic-composition-expression">
+              <span class="label">Model rewrite</span>
+              <code id="symbolic-composition-expression"></code>
+            </div>
+            <div id="symbolic-composition-layers" class="symbolic-composition-layers"></div>
+          </div>
+        </div>
       </div>
     </div>
 

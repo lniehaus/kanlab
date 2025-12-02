@@ -59,6 +59,9 @@ const SYMBOLIC_PREVIEW_SAMPLES = 200;
 const SYMBOLIC_ALLOWED_INPUTS: { [key: string]: boolean } = {
   "x": true
 };
+const SYMBOLIC_COMPOSITION_NODE_RATIO = 0.03;
+const SYMBOLIC_COMPOSITION_MIN_RMS = 1e-3;
+const SYMBOLIC_COMPOSITION_COEFF_EPS = 1e-3;
 
 // Helper: populate numControlPoints options based on degree
 function updateNumControlPointsOptionsForDegree(degreeVal: number, currentNumControlPoints?: number) {
@@ -196,6 +199,50 @@ type SymbolicSample = {
   target: number;
   targetNormalized: number;
   predicted: number;
+};
+
+type SymbolicNetworkTrace = {
+  sampleXs: number[];
+  nodeOutputs: { [nodeId: string]: number[] };
+  edgeInputs: { [edgeId: string]: number[] };
+  edgeOutputs: { [edgeId: string]: number[] };
+};
+
+type SymbolicEdgeMatch = {
+  edgeId: string;
+  sourceId: string;
+  destId: string;
+  entry: SymbolicLibraryEntry;
+  coefficient: number;
+  rmse: number;
+  contributionRms: number;
+  color: string;
+  pruned: boolean;
+  sourceLabel: string;
+  renderedExpression?: string;
+  renderedFull?: string;
+  sourceExpression?: string;
+  termSign?: "+" | "-";
+};
+
+type SymbolicNodeComposition = {
+  nodeId: string;
+  label: string;
+  layerIndex: number;
+  expression: string;
+  contributions: SymbolicEdgeMatch[];
+  isOutput: boolean;
+};
+
+type SymbolicCompositionLayer = {
+  title: string;
+  layerIndex: number;
+  nodes: SymbolicNodeComposition[];
+};
+
+type SymbolicCompositionSummary = {
+  expression: string;
+  layers: SymbolicCompositionLayer[];
 };
 
 class SymbolicPlot {
@@ -566,6 +613,7 @@ let hoverCardLibraryInfo: d3.Selection<any> | null = null;
 let currentHoverCardEdge: kan.KANEdge = null;
 let symbolicResult: SymbolicDatasetResult | null = null;
 let symbolicPlot: SymbolicPlot | null = null;
+let symbolicComposition: SymbolicCompositionSummary | null = null;
 // Layout manager for coordinating network positions
 let layoutManager: NetworkLayoutManager | null = null;
 // Timeout for hiding hover card with delay
@@ -775,6 +823,7 @@ function makeGUI() {
   }
 
   initSymbolicLibraryUI();
+  initSymbolicCompositionToggle();
   updateSymbolicLibraryFit();
 
   // numControlPoints UI
@@ -1881,6 +1930,7 @@ function updateSymbolicPlot(): void {
       symbolicPlot.clear();
       symbolicPlot.setVisible(false);
     }
+    updateSymbolicComposition();
     return;
   }
   let plot = ensureSymbolicPlot();
@@ -1921,6 +1971,7 @@ function updateSymbolicPlot(): void {
   }
   const fit = updateSymbolicLibraryFit(samples);
   plot.update(samples, trainData, testData, scale, fit);
+  updateSymbolicComposition();
 }
 
 function initSymbolicLibraryUI(): void {
@@ -2444,6 +2495,514 @@ function formatLibraryNumber(value: number): string {
   return value.toFixed(3);
 }
 
+function updateSymbolicComposition(): void {
+  if (state.problem !== Problem.SYMBOLIC) {
+    symbolicComposition = null;
+    renderSymbolicCompositionPanel(null);
+    return;
+  }
+  symbolicComposition = computeSymbolicCompositionSummary();
+  renderSymbolicCompositionPanel(symbolicComposition);
+}
+
+function renderSymbolicCompositionPanel(summary: SymbolicCompositionSummary | null): void {
+  const panel = d3.select("#symbolic-composition-panel");
+  if (panel.empty()) {
+    return;
+  }
+  const body = panel.select(".symbolic-composition-body");
+  if (body.empty()) {
+    return;
+  }
+  const expressionEl = body.select("#symbolic-composition-expression");
+  const layersContainer = body.select("#symbolic-composition-layers");
+  const emptyEl = body.select("#symbolic-composition-empty");
+
+  if (!summary) {
+    expressionEl.text("");
+    layersContainer.selectAll("*").remove();
+    let message = "";
+    if (state.problem !== Problem.SYMBOLIC) {
+      message = "Switch to symbolic regression to inspect compositions.";
+    } else if (!symbolicResult || !symbolicResult.isValid) {
+      message = "Enter a valid symbolic expression to inspect compositions.";
+    } else if (!state.symbolicLibrarySelection || !state.symbolicLibrarySelection.length) {
+      message = "Activate at least one library function to match splines.";
+    } else {
+      message = "No active spline matches yet.";
+    }
+    emptyEl.text(message).style("display", "block");
+    panel.classed("has-data", false);
+    return;
+  }
+
+  emptyEl.style("display", "none");
+  panel.classed("has-data", true);
+  expressionEl.text(`f(x) ≈ ${summary.expression}`);
+
+  const layers = layersContainer.selectAll(".symbolic-composition-layer")
+    .data(summary.layers, (d: any) => d.layerIndex);
+
+  const layersEnter = layers.enter()
+    .append("div")
+    .attr("class", "symbolic-composition-layer");
+
+  layersEnter.append("div")
+    .attr("class", "symbolic-composition-layer-title");
+
+  layersEnter.append("div")
+    .attr("class", "symbolic-composition-layer-nodes");
+
+  layers.exit().remove();
+
+  layers.select(".symbolic-composition-layer-title")
+    .text(d => d.title);
+
+  layers.each(function (layerData) {
+    const nodeContainer = d3.select(this).select(".symbolic-composition-layer-nodes");
+    const nodeSel = nodeContainer.selectAll(".symbolic-composition-node")
+      .data(layerData.nodes, (d: any) => d.nodeId);
+
+    const nodeEnter = nodeSel.enter()
+      .append("div")
+      .attr("class", "symbolic-composition-node");
+
+    nodeEnter.append("div")
+      .attr("class", "symbolic-composition-node-header");
+
+    nodeEnter.append("code")
+      .attr("class", "symbolic-composition-node-expression");
+
+    nodeEnter.append("ul")
+      .attr("class", "symbolic-composition-contributions");
+
+    nodeSel.exit().remove();
+
+    nodeSel.classed("is-output", d => d.isOutput);
+
+    nodeSel.select(".symbolic-composition-node-header")
+      .text(d => d.label);
+
+    nodeSel.select(".symbolic-composition-node-expression")
+      .text(d => d.expression || "0");
+
+    nodeSel.each(function (nodeData) {
+      const list = d3.select(this).select(".symbolic-composition-contributions");
+      list.selectAll("*").remove();
+      if (!nodeData.contributions.length) {
+        list.append("li")
+          .attr("class", "symbolic-composition-contribution is-empty")
+          .text("All incoming splines are currently pruned.");
+        return;
+      }
+      nodeData.contributions.forEach(contrib => {
+        const item = list.append("li")
+          .attr("class", "symbolic-composition-contribution")
+          .classed("is-pruned", contrib.pruned);
+        item.append("span")
+          .attr("class", "symbolic-composition-chip")
+          .style("background-color", contrib.color)
+          .text(contrib.entry.label);
+        const body = item.append("div")
+          .attr("class", "symbolic-composition-contribution-body");
+        body.append("div")
+          .attr("class", "symbolic-composition-contribution-label")
+          .text(contrib.renderedExpression || contrib.entry.expression);
+        body.append("div")
+          .attr("class", "symbolic-composition-contribution-meta")
+          .text(() => {
+            const parts: string[] = [];
+            parts.push(`coef ${formatLibraryNumber(contrib.coefficient)}`);
+            parts.push(`rmse ${formatLibraryNumber(contrib.rmse)}`);
+            parts.push(`src ${contrib.sourceLabel}`);
+            if (contrib.pruned) {
+              parts.push("pruned");
+            }
+            return parts.join(" | ");
+          });
+      });
+    });
+  });
+}
+
+function initSymbolicCompositionToggle(): void {
+  const button = document.getElementById("symbolic-composition-toggle");
+  if (!button) {
+    return;
+  }
+  button.addEventListener("click", () => {
+    const expanded = state.symbolicCompositionExpanded !== false;
+    state.symbolicCompositionExpanded = !expanded;
+    state.serialize();
+    applySymbolicCompositionExpandedState();
+  });
+  applySymbolicCompositionExpandedState();
+}
+
+function applySymbolicCompositionExpandedState(): void {
+  const expanded = state.symbolicCompositionExpanded !== false;
+  const panel = document.getElementById("symbolic-composition-panel");
+  if (panel) {
+    panel.classList.toggle("is-collapsed", !expanded);
+  }
+  const button = document.getElementById("symbolic-composition-toggle");
+  if (button) {
+    button.setAttribute("aria-expanded", expanded ? "true" : "false");
+    const label = button.querySelector(".symbolic-composition-toggle-label");
+    if (label) {
+      label.textContent = expanded ? "Hide" : "Show";
+    }
+  }
+}
+
+function computeSymbolicCompositionSummary(): SymbolicCompositionSummary | null {
+  if (state.problem !== Problem.SYMBOLIC || !symbolicResult || !symbolicResult.isValid || !network || !network.length) {
+    return null;
+  }
+  const selection = Array.isArray(state.symbolicLibrarySelection) ? state.symbolicLibrarySelection : [];
+  if (!selection.length) {
+    return null;
+  }
+  const entries = selection
+    .map(id => getSymbolicLibraryEntry(id))
+    .filter((entry): entry is SymbolicLibraryEntry => !!entry);
+  if (!entries.length) {
+    return null;
+  }
+
+  const trace = sampleSymbolicNetworkTrace();
+  if (!trace) {
+    return null;
+  }
+
+  const nodeById: { [id: string]: kan.KANNode } = {};
+  const baseExpressions: { [id: string]: string } = {};
+  const nodeLabels: { [id: string]: string } = {};
+
+  network.forEach((layer, layerIdx) => {
+    layer.forEach((node, idx) => {
+      nodeById[node.id] = node;
+      if (layerIdx === 0) {
+        const feature = INPUTS[node.id];
+        const label = state.problem === Problem.SYMBOLIC ? "x" : (feature && feature.label ? feature.label : node.id);
+        baseExpressions[node.id] = label;
+        nodeLabels[node.id] = label;
+      } else if (layerIdx === network.length - 1) {
+        nodeLabels[node.id] = "Output";
+      } else {
+        nodeLabels[node.id] = `Layer ${layerIdx} · Node ${idx + 1}`;
+      }
+    });
+  });
+
+  const nodeRms = computeRmsMap(trace.nodeOutputs);
+  const matchMap = computeEdgeMatches(entries, trace, nodeRms, nodeLabels);
+  const expressionCache: { [id: string]: string } = {};
+  Object.keys(baseExpressions).forEach(key => {
+    expressionCache[key] = baseExpressions[key];
+  });
+  const resolving: { [id: string]: boolean } = {};
+
+  const resolveExpression = (nodeId: string): string => {
+    if (expressionCache[nodeId] != null) {
+      return expressionCache[nodeId];
+    }
+    if (resolving[nodeId]) {
+      return nodeId;
+    }
+    resolving[nodeId] = true;
+    const node = nodeById[nodeId];
+    if (!node) {
+      expressionCache[nodeId] = "0";
+      resolving[nodeId] = false;
+      return "0";
+    }
+    const usableMatches = node.inputEdges
+      .map(edge => matchMap[edge.id])
+      .filter((match): match is SymbolicEdgeMatch => !!match && !match.pruned);
+    if (!usableMatches.length) {
+      expressionCache[nodeId] = "0";
+      resolving[nodeId] = false;
+      return "0";
+    }
+    const terms = usableMatches.map(match => {
+      const sourceExpr = resolveExpression(match.sourceId);
+      const descriptor = describeEdgeTerm(match, sourceExpr);
+      match.renderedExpression = descriptor.text;
+      match.renderedFull = descriptor.full;
+      match.termSign = descriptor.sign;
+      match.sourceExpression = sourceExpr;
+      return { sign: descriptor.sign, text: descriptor.text };
+    });
+    const combined = combineTerms(terms);
+    expressionCache[nodeId] = combined;
+    resolving[nodeId] = false;
+    return combined;
+  };
+
+  const outputNode = network[network.length - 1][0];
+  const layers: SymbolicCompositionLayer[] = [];
+
+  for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
+    const layerNodes = network[layerIdx];
+    const title = layerIdx === network.length - 1 ? "Output layer" : `Layer ${layerIdx}`;
+    const nodes: SymbolicNodeComposition[] = layerNodes.map((node, idx) => {
+      const contributions = node.inputEdges
+        .map(edge => matchMap[edge.id])
+        .filter((match): match is SymbolicEdgeMatch => !!match)
+        .sort((a, b) => {
+          if (a.pruned !== b.pruned) {
+            return a.pruned ? 1 : -1;
+          }
+          return (b.contributionRms || 0) - (a.contributionRms || 0);
+        });
+      const expression = resolveExpression(node.id);
+      return {
+        nodeId: node.id,
+        label: nodeLabels[node.id] || `Node ${idx + 1}`,
+        layerIndex: layerIdx,
+        expression,
+        contributions,
+        isOutput: node === outputNode
+      };
+    });
+    layers.push({ title, layerIndex: layerIdx, nodes });
+  }
+
+  Object.keys(matchMap).forEach(edgeId => {
+    ensureEdgeRenderText(matchMap[edgeId], expressionCache, baseExpressions, nodeLabels);
+  });
+
+  const finalExpression = resolveExpression(outputNode.id) || "0";
+
+  return {
+    expression: finalExpression,
+    layers
+  };
+}
+
+function sampleSymbolicNetworkTrace(): SymbolicNetworkTrace | null {
+  if (!network || !network.length) {
+    return null;
+  }
+  const sampleXs: number[] = [];
+  for (let i = 0; i < SYMBOLIC_PREVIEW_SAMPLES; i++) {
+    sampleXs.push(-1 + (2 * i) / Math.max(1, SYMBOLIC_PREVIEW_SAMPLES - 1));
+  }
+  const nodeOutputs: { [id: string]: number[] } = {};
+  const edgeInputs: { [id: string]: number[] } = {};
+  const edgeOutputs: { [id: string]: number[] } = {};
+  network.forEach(layer => {
+    layer.forEach(node => {
+      nodeOutputs[node.id] = [];
+    });
+  });
+
+  sampleXs.forEach(x => {
+    const inputVec = constructInput(x, 0);
+    const inputLayer = network[0];
+    inputLayer.forEach((node, idx) => {
+      const value = inputVec[idx] != null ? inputVec[idx] : 0;
+      node.output = value;
+      nodeOutputs[node.id].push(value);
+    });
+    for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
+      const currentLayer = network[layerIdx];
+      currentLayer.forEach(node => {
+        let sum = 0;
+        node.inputEdges.forEach(edge => {
+          const inputVal = edge.sourceNode.output;
+          const edgeOutput = edge.learnableFunction.evaluate(inputVal);
+          if (!edgeInputs[edge.id]) {
+            edgeInputs[edge.id] = [];
+          }
+          if (!edgeOutputs[edge.id]) {
+            edgeOutputs[edge.id] = [];
+          }
+          edgeInputs[edge.id].push(inputVal);
+          edgeOutputs[edge.id].push(edgeOutput);
+          sum += edgeOutput;
+        });
+        node.output = sum;
+        if (!nodeOutputs[node.id]) {
+          nodeOutputs[node.id] = [];
+        }
+        nodeOutputs[node.id].push(sum);
+      });
+    }
+  });
+
+  return { sampleXs, nodeOutputs, edgeInputs, edgeOutputs };
+}
+
+function computeEdgeMatches(
+  entries: SymbolicLibraryEntry[],
+  trace: SymbolicNetworkTrace,
+  nodeRms: { [id: string]: number },
+  nodeLabels: { [id: string]: string }
+): { [edgeId: string]: SymbolicEdgeMatch } {
+  const matches: { [edgeId: string]: SymbolicEdgeMatch } = {};
+  if (!network) {
+    return matches;
+  }
+  for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
+    const layer = network[layerIdx];
+    layer.forEach(node => {
+      node.inputEdges.forEach(edge => {
+        const inputs = trace.edgeInputs[edge.id];
+        const outputs = trace.edgeOutputs[edge.id];
+        if (!inputs || !outputs || !inputs.length || inputs.length !== outputs.length) {
+          return;
+        }
+        const best = findBestLibraryEntryForEdge(entries, inputs, outputs);
+        if (!best) {
+          return;
+        }
+        const contributionRms = computeRms(outputs);
+        const destRms = nodeRms[edge.destNode.id] || 0;
+        const pruneThreshold = Math.max(SYMBOLIC_COMPOSITION_MIN_RMS, destRms * SYMBOLIC_COMPOSITION_NODE_RATIO);
+        const pruned = !edge.isActive || contributionRms < pruneThreshold;
+        matches[edge.id] = {
+          edgeId: edge.id,
+          sourceId: edge.sourceNode.id,
+          destId: edge.destNode.id,
+          entry: best.entry,
+          coefficient: best.coefficient,
+          rmse: best.rmse,
+          contributionRms,
+          color: getSymbolicLibraryColor(best.entry.id),
+          pruned,
+          sourceLabel: nodeLabels[edge.sourceNode.id] || edge.sourceNode.id
+        };
+      });
+    });
+  }
+  return matches;
+}
+
+function findBestLibraryEntryForEdge(
+  entries: SymbolicLibraryEntry[],
+  inputs: number[],
+  outputs: number[]
+): { entry: SymbolicLibraryEntry; coefficient: number; rmse: number } | null {
+  if (!entries.length || !inputs.length || inputs.length !== outputs.length) {
+    return null;
+  }
+  let best: { entry: SymbolicLibraryEntry; coefficient: number; rmse: number } | null = null;
+  entries.forEach(entry => {
+    const basisValues: number[] = new Array(inputs.length);
+    let numerator = 0;
+    let denominator = 0;
+    for (let i = 0; i < inputs.length; i++) {
+      const basis = safeLibraryValue(entry.evaluator(inputs[i]));
+      basisValues[i] = basis;
+      numerator += basis * outputs[i];
+      denominator += basis * basis;
+    }
+    if (!isFinite(denominator) || Math.abs(denominator) < 1e-9) {
+      return;
+    }
+    const coefficient = numerator / denominator;
+    let mse = 0;
+    for (let i = 0; i < inputs.length; i++) {
+      const diff = coefficient * basisValues[i] - outputs[i];
+      mse += diff * diff;
+    }
+    const rmse = Math.sqrt(mse / inputs.length);
+    if (!best || rmse < best.rmse) {
+      best = { entry, coefficient, rmse };
+    }
+  });
+  return best;
+}
+
+function computeRms(values: number[]): number {
+  if (!values || !values.length) {
+    return 0;
+  }
+  let sumSq = 0;
+  values.forEach(v => {
+    sumSq += v * v;
+  });
+  return Math.sqrt(sumSq / values.length);
+}
+
+function computeRmsMap(map: { [id: string]: number[] }): { [id: string]: number } {
+  const result: { [id: string]: number } = {};
+  Object.keys(map).forEach(key => {
+    result[key] = computeRms(map[key]);
+  });
+  return result;
+}
+
+function substituteEntryExpression(expression: string, inner: string): string {
+  if (!expression || expression.indexOf("x") === -1) {
+    return expression;
+  }
+  const replacement = `(${inner})`;
+  let output = "";
+  for (let i = 0; i < expression.length; i++) {
+    const char = expression[i];
+    if (char !== "x") {
+      output += char;
+      continue;
+    }
+    const prev = i > 0 ? expression[i - 1] : "";
+    const next = i < expression.length - 1 ? expression[i + 1] : "";
+    const prevIsWord = /[A-Za-z0-9_]/.test(prev);
+    const nextIsWord = /[A-Za-z0-9_]/.test(next);
+    if (prevIsWord || nextIsWord) {
+      output += char;
+    } else {
+      output += replacement;
+    }
+  }
+  return output;
+}
+
+function describeEdgeTerm(match: SymbolicEdgeMatch, sourceExpr: string): { sign: "+" | "-"; text: string; full: string } {
+  const sign: "+" | "-" = match.coefficient >= 0 ? "+" : "-";
+  const absCoeff = Math.abs(match.coefficient);
+  const needsCoeff = Math.abs(absCoeff - 1) > SYMBOLIC_COMPOSITION_COEFF_EPS;
+  const substituted = substituteEntryExpression(match.entry.expression, sourceExpr);
+  const text = needsCoeff ? `${formatLibraryNumber(absCoeff)}*${substituted}` : substituted;
+  const full = (sign === "-" ? "-" : "") + text;
+  return { sign, text, full };
+}
+
+function combineTerms(terms: Array<{ sign: "+" | "-"; text: string }>): string {
+  if (!terms.length) {
+    return "0";
+  }
+  return terms.map((term, idx) => {
+    if (idx === 0) {
+      return (term.sign === "-" ? "-" : "") + term.text;
+    }
+    return ` ${term.sign} ${term.text}`;
+  }).join("");
+}
+
+function ensureEdgeRenderText(
+  match: SymbolicEdgeMatch,
+  expressionCache: { [id: string]: string },
+  baseExpressions: { [id: string]: string },
+  nodeLabels: { [id: string]: string }
+): void {
+  if (!match || match.renderedExpression) {
+    return;
+  }
+  const sourceExpr = expressionCache[match.sourceId] ||
+    baseExpressions[match.sourceId] ||
+    nodeLabels[match.sourceId] ||
+    match.sourceLabel ||
+    match.sourceId;
+  const descriptor = describeEdgeTerm(match, sourceExpr);
+  match.renderedExpression = descriptor.text;
+  match.renderedFull = descriptor.full;
+  match.termSign = descriptor.sign;
+  match.sourceExpression = sourceExpr;
+}
+
 function updateProblemSpecificUI(): void {
   let isSymbolic = state.problem === Problem.SYMBOLIC;
   d3.selectAll(".ui-dataset").style("display", isSymbolic ? "none" : null);
@@ -2451,6 +3010,10 @@ function updateProblemSpecificUI(): void {
   d3.selectAll(".ui-symbolicExpression").style("display", isSymbolic ? "block" : "none");
   d3.select("#symbolic-plot").style("display", isSymbolic ? "block" : "none");
   d3.select("#symbolic-library-panel").style("display", isSymbolic ? "block" : "none");
+  d3.select("#symbolic-composition-panel").style("display", isSymbolic ? "block" : "none");
+  if (isSymbolic) {
+    applySymbolicCompositionExpandedState();
+  }
   if (!isSymbolic && symbolicPlot) {
     symbolicPlot.clear();
     symbolicPlot.setVisible(false);
@@ -2469,6 +3032,7 @@ function updateProblemSpecificUI(): void {
   }
   refreshSymbolicLibraryUI();
   updateHoverCardSymbolicOverlay();
+  updateSymbolicComposition();
 }
 
 let firstInteraction = true;
