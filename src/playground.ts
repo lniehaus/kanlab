@@ -1897,7 +1897,7 @@ function updateSymbolicPlot(): void {
     const predicted = predictedNormalized * scale;
     samples.push({ x, target, predicted });
   }
-  const fit = (symbolicResult && symbolicResult.isValid) ? symbolicLibraryFit : null;
+  const fit = updateSymbolicLibraryFit(samples);
   plot.update(samples, trainData, testData, scale, fit);
 }
 
@@ -1982,21 +1982,14 @@ function renderSymbolicLibrarySelection(): void {
     return;
   }
 
-  let coefficientMap: { [key: string]: number } = {};
-  if (symbolicLibraryFit && symbolicLibraryFit.basis) {
-    symbolicLibraryFit.basis.forEach(entry => {
-      coefficientMap[entry.entry.id] = entry.coefficient;
-    });
-  }
-
   selectedIds.forEach(id => {
     let entry = getSymbolicLibraryEntry(id);
     if (!entry) {
       return;
     }
-    let coeff = coefficientMap[id];
     let row = container.append("div")
-      .attr("class", "symbolic-library-row");
+      .attr("class", "symbolic-library-row")
+      .attr("data-entry-id", id);
     row.append("span")
       .attr("class", "symbolic-library-color")
       .style("background-color", getSymbolicLibraryColor(id));
@@ -2010,7 +2003,7 @@ function renderSymbolicLibrarySelection(): void {
 
     row.append("span")
       .attr("class", "symbolic-library-coefficient")
-      .text((coeff != null && isFinite(coeff)) ? formatLibraryNumber(coeff) : "—");
+      .text("—");
 
     row.append("button")
       .attr("type", "button")
@@ -2018,17 +2011,69 @@ function renderSymbolicLibrarySelection(): void {
       .text("Remove")
       .on("click", () => removeSymbolicLibraryEntry(id));
   });
+}
 
-  if (symbolicLibraryFit && symbolicLibraryFit.combined && symbolicLibraryFit.combined.length) {
-    container.append("div")
-      .attr("class", "symbolic-library-rmse")
-      .text(`RMSE: ${formatLibraryNumber(symbolicLibraryFit.rmse)}`);
+function updateSymbolicLibraryCoefficientsDisplay(): void {
+  let container = d3.select("#symbolic-library-selected");
+  if (container.empty()) {
+    return;
   }
+
+  if (!symbolicLibraryFit || !symbolicLibraryFit.basis || !symbolicLibraryFit.basis.length) {
+    container.selectAll(".symbolic-library-coefficient").text("—");
+    container.selectAll(".symbolic-library-rmse").remove();
+    return;
+  }
+
+  const coefficientMap: { [key: string]: number } = {};
+  let totalMagnitude = 0;
+  symbolicLibraryFit.basis.forEach(entry => {
+    coefficientMap[entry.entry.id] = entry.coefficient;
+    totalMagnitude += Math.abs(entry.coefficient);
+  });
+
+  container.selectAll(".symbolic-library-row").each(function () {
+    const row = d3.select(this);
+    const id = row.attr("data-entry-id");
+    if (!id) {
+      return;
+    }
+    const coeff = coefficientMap[id];
+    row.select(".symbolic-library-coefficient")
+      .text((coeff != null && isFinite(coeff)) ? formatCoefficientWithPercentage(coeff, totalMagnitude) : "—");
+  });
+
+  let rmseSection = container.select(".symbolic-library-rmse");
+  if (symbolicLibraryFit.combined && symbolicLibraryFit.combined.length) {
+    if (rmseSection.empty()) {
+      rmseSection = container.append("div")
+        .attr("class", "symbolic-library-rmse");
+    }
+    rmseSection.text(`RMSE: ${formatLibraryNumber(symbolicLibraryFit.rmse)}`);
+  } else if (!rmseSection.empty()) {
+    rmseSection.remove();
+  }
+}
+
+// Convert a raw coefficient into "value (percent%)" for the library UI.
+function formatCoefficientWithPercentage(value: number, totalMagnitude: number): string {
+  const formattedValue = formatLibraryNumber(value);
+  if (!isFinite(totalMagnitude) || totalMagnitude <= 0) {
+    return formattedValue;
+  }
+  const contribution = Math.abs(value) / totalMagnitude;
+  if (!isFinite(contribution)) {
+    return formattedValue;
+  }
+  const percent = (contribution * 100);
+  const percentText = percent >= 10 ? percent.toFixed(0) : percent.toFixed(1);
+  return `${formattedValue} (${percentText.replace(/\.0$/, "")}%)`;
 }
 
 function refreshSymbolicLibraryUI(): void {
   renderSymbolicLibraryCatalog();
   renderSymbolicLibrarySelection();
+  updateSymbolicLibraryCoefficientsDisplay();
 }
 
 function toggleSymbolicLibraryEntry(id: string): void {
@@ -2064,26 +2109,40 @@ function removeSymbolicLibraryEntry(id: string): void {
   updateSymbolicPlot();
 }
 
-function updateSymbolicLibraryFit(): void {
+function updateSymbolicLibraryFit(samples?: SymbolicSample[]): SymbolicLibraryFit | null {
   if (state.problem !== Problem.SYMBOLIC || !symbolicResult || !symbolicResult.isValid) {
     symbolicLibraryFit = null;
-    refreshSymbolicLibraryUI();
-    return;
+    if (!samples) {
+      refreshSymbolicLibraryUI();
+    } else {
+      updateSymbolicLibraryCoefficientsDisplay();
+    }
+    return null;
   }
   let selectedIds = Array.isArray(state.symbolicLibrarySelection) ?
     state.symbolicLibrarySelection.filter(id => !!getSymbolicLibraryEntry(id)) : [];
   if (selectedIds.length === 0) {
     symbolicLibraryFit = null;
-    refreshSymbolicLibraryUI();
-    return;
+    if (!samples) {
+      refreshSymbolicLibraryUI();
+    } else {
+      updateSymbolicLibraryCoefficientsDisplay();
+    }
+    return null;
   }
   let entries = selectedIds.map(id => getSymbolicLibraryEntry(id)!)
     .filter((entry): entry is SymbolicLibraryEntry => !!entry);
-  symbolicLibraryFit = computeSymbolicLibraryFit(entries, symbolicResult);
-  refreshSymbolicLibraryUI();
+  if (samples && samples.length) {
+    symbolicLibraryFit = computeSymbolicLibraryFitFromSamples(entries, samples);
+    updateSymbolicLibraryCoefficientsDisplay();
+  } else {
+    symbolicLibraryFit = computeSymbolicLibraryFitFromEvaluator(entries, symbolicResult);
+    refreshSymbolicLibraryUI();
+  }
+  return symbolicLibraryFit;
 }
 
-function computeSymbolicLibraryFit(entries: SymbolicLibraryEntry[], result: SymbolicDatasetResult): SymbolicLibraryFit | null {
+function computeSymbolicLibraryFitFromEvaluator(entries: SymbolicLibraryEntry[], result: SymbolicDatasetResult): SymbolicLibraryFit | null {
   if (!entries.length || !result || !result.evaluator) {
     return null;
   }
@@ -2092,8 +2151,23 @@ function computeSymbolicLibraryFit(entries: SymbolicLibraryEntry[], result: Symb
   for (let i = 0; i < SYMBOLIC_PREVIEW_SAMPLES; i++) {
     const x = -1 + (2 * i) / Math.max(1, SYMBOLIC_PREVIEW_SAMPLES - 1);
     xs.push(x);
-    let value = safeLibraryValue(result.evaluator(x));
-    target.push(value);
+    target.push(safeLibraryValue(result.evaluator(x)));
+  }
+  return computeSymbolicLibraryFitInternal(entries, xs, target);
+}
+
+function computeSymbolicLibraryFitFromSamples(entries: SymbolicLibraryEntry[], samples: SymbolicSample[]): SymbolicLibraryFit | null {
+  if (!entries.length || !samples || !samples.length) {
+    return null;
+  }
+  const xs = samples.map(sample => sample.x);
+  const target = samples.map(sample => safeLibraryValue(sample.predicted));
+  return computeSymbolicLibraryFitInternal(entries, xs, target);
+}
+
+function computeSymbolicLibraryFitInternal(entries: SymbolicLibraryEntry[], xs: number[], target: number[]): SymbolicLibraryFit | null {
+  if (!entries.length || !xs.length || xs.length !== target.length) {
+    return null;
   }
 
   let design = entries.map(entry => xs.map(x => safeLibraryValue(entry.evaluator(x))));
