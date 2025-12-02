@@ -297,7 +297,7 @@ export class KANEdge {
   outputHistogram: number[] = [];
   histogramBins: number = 20;
   histogramRange: [number, number] = [-1, 1];
-  outputHistogramRange: [number, number] = [-2, 2];
+  outputHistogramRange: [number, number] = [-1, 1];
   
   // Track observed ranges for adaptive histograms
   private observedInputMin: number = Infinity;

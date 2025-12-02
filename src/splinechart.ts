@@ -167,7 +167,7 @@ export class SplineChart {
       .range([0, this.width]);
 
     this.yScale = d3.scale.linear()
-      .domain([-2, 2])
+      .domain([-1, 1])
       .range([this.height, 0]);
 
     // Add axes
@@ -216,7 +216,7 @@ export class SplineChart {
       .range([0, this.width]);
 
     this.yScale = d3.scale.linear()
-      .domain([-2, 2])
+      .domain([-1, 1])
       .range([this.height, 0]);
 
     // Add axes
@@ -1028,9 +1028,9 @@ export class SplineChart {
     const histogramWidth = this.settings.histogramSize || 50;
     const histogramGap = this.settings.histogramGap || 10;
     
-    // The histogram bins represent the range [-2, 2] (matching yScale domain)
-    const yMin = -2;
-    const yMax = 2;
+    // The histogram bins represent the range [-1, 1] (matching yScale domain)
+    const yMin = -1;
+    const yMax = 1;
     const binHeight = (yMax - yMin) / numBins;
     
     // Create histogram group positioned to the right of the main plot
@@ -1074,8 +1074,8 @@ export class SplineChart {
     const histogramWidth = this.settings.histogramSize || 50;
     const histogramGap = this.settings.histogramGap || 10;
     
-    const yMin = -2;
-    const yMax = 2;
+    const yMin = -1;
+    const yMax = 1;
     const binHeight = (yMax - yMin) / numBins;
     
     // Use D3 data binding for histogram group
