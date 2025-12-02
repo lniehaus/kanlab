@@ -136,6 +136,14 @@ type SymbolicLibraryFit = {
   rmse: number;
 };
 
+type SymbolicBestBasisSummary = {
+  entry: SymbolicLibraryEntry;
+  coefficient: number;
+  samples: SymbolicCurvePoint[];
+  color: string;
+  rmse: number;
+};
+
 const SYMBOLIC_LIBRARY_COLORS = [
   "#4caf50",
   "#8e24aa",
@@ -162,6 +170,7 @@ const SYMBOLIC_LIBRARY_ENTRIES: SymbolicLibraryEntry[] = [
 ];
 
 let symbolicLibraryFit: SymbolicLibraryFit | null = null;
+let symbolicBestBasis: SymbolicBestBasisSummary | null = null;
 
 let HIDABLE_CONTROLS = [
   ["Show test data", "showTestData"],
@@ -185,6 +194,7 @@ let HIDABLE_CONTROLS = [
 type SymbolicSample = {
   x: number;
   target: number;
+  targetNormalized: number;
   predicted: number;
 };
 
@@ -551,6 +561,7 @@ let splineChart: SplineChart = null;
 let edgeSplineCharts: { [edgeId: string]: SplineChart } = {};
 // Hover card spline chart
 let hoverCardSplineChart: SplineChart = null;
+let hoverCardLibraryInfo: d3.Selection<any> | null = null;
 // Current edge being displayed in hover card
 let currentHoverCardEdge: kan.KANEdge = null;
 let symbolicResult: SymbolicDatasetResult | null = null;
@@ -895,6 +906,7 @@ function updateWeightsUI(network: kan.KANNode[][], container) {
           const inputHistogramData = edge.getNormalizedHistogram();
           const outputHistogramData = edge.getNormalizedOutputHistogram();
           hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData);
+          updateHoverCardSymbolicOverlay();
         }
       }
     }
@@ -1282,6 +1294,7 @@ function drawLinkWithSplineChart(
       const inputHistogramData = edge.getNormalizedHistogram();
       const outputHistogramData = edge.getNormalizedOutputHistogram();
       hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData);
+      updateHoverCardSymbolicOverlay();
     }
 
     // Prevent event from bubbling to hover handlers
@@ -1892,10 +1905,19 @@ function updateSymbolicPlot(): void {
     } catch (e) {
       target = 0;
     }
+    let targetNormalized = 0;
+    try {
+      targetNormalized = symbolicResult.normalizedEvaluator(x);
+      if (!isFinite(targetNormalized) || isNaN(targetNormalized)) {
+        targetNormalized = Math.max(-1, Math.min(1, target / scale));
+      }
+    } catch (e) {
+      targetNormalized = Math.max(-1, Math.min(1, target / scale));
+    }
     const input = constructInput(x, 0);
     const predictedNormalized = kan.kanForwardProp(network, input);
     const predicted = predictedNormalized * scale;
-    samples.push({ x, target, predicted });
+    samples.push({ x, target, targetNormalized, predicted });
   }
   const fit = updateSymbolicLibraryFit(samples);
   plot.update(samples, trainData, testData, scale, fit);
@@ -2070,6 +2092,111 @@ function formatCoefficientWithPercentage(value: number, totalMagnitude: number):
   return `${formattedValue} (${percentText.replace(/\.0$/, "")}%)`;
 }
 
+function setSymbolicBestBasis(best: SymbolicBestBasisSummary | null): void {
+  symbolicBestBasis = best;
+  updateHoverCardSymbolicOverlay();
+}
+
+function computeBestSingleBasis(entries: SymbolicLibraryEntry[], xs: number[], normalizationScale: number, normalizedTarget: number[]): SymbolicBestBasisSummary | null {
+  if (!entries.length || !xs.length || xs.length !== normalizedTarget.length) {
+    return null;
+  }
+
+  let best: SymbolicBestBasisSummary | null = null;
+  const numSamples = xs.length;
+  const scale = Math.max(normalizationScale || 1, 1e-6);
+
+  entries.forEach(entry => {
+    const basisValues: number[] = new Array(numSamples);
+    let numerator = 0;
+    let denominator = 0;
+    for (let i = 0; i < numSamples; i++) {
+      const val = safeLibraryValue(entry.evaluator(xs[i]) / scale);
+      basisValues[i] = val;
+      numerator += val * normalizedTarget[i];
+      denominator += val * val;
+    }
+    if (!isFinite(denominator) || Math.abs(denominator) < 1e-9) {
+      return;
+    }
+    const coefficient = numerator / denominator;
+    let mse = 0;
+    const samples: SymbolicCurvePoint[] = new Array(numSamples);
+    for (let i = 0; i < numSamples; i++) {
+      const y = coefficient * basisValues[i];
+      const diff = y - normalizedTarget[i];
+      mse += diff * diff;
+      samples[i] = { x: xs[i], y };
+    }
+    const rmse = Math.sqrt(mse / numSamples);
+    if (!best || rmse < best.rmse) {
+      best = {
+        entry,
+        coefficient,
+        samples,
+        color: getSymbolicLibraryColor(entry.id),
+        rmse
+      };
+    }
+  });
+
+  return best;
+}
+
+function updateHoverCardSymbolicOverlay(): void {
+  if (!hoverCardSplineChart) {
+    return;
+  }
+  if (state.problem !== Problem.SYMBOLIC) {
+    hoverCardSplineChart.setOverlayCurve(null);
+    if (hoverCardLibraryInfo) {
+      hoverCardLibraryInfo.style("display", "none").text("");
+    }
+    return;
+  }
+
+  if (!symbolicBestBasis || !symbolicBestBasis.samples || !symbolicBestBasis.samples.length) {
+    hoverCardSplineChart.setOverlayCurve(null);
+    if (hoverCardLibraryInfo) {
+      hoverCardLibraryInfo.style("display", "block")
+        .text("Select at least one library function to compare.");
+    }
+    return;
+  }
+
+  hoverCardSplineChart.setOverlayCurve(symbolicBestBasis.samples, {
+    color: symbolicBestBasis.color
+  });
+
+  if (hoverCardLibraryInfo) {
+    hoverCardLibraryInfo.style("display", "block");
+    hoverCardLibraryInfo.selectAll("*").remove();
+
+    hoverCardLibraryInfo.append("div")
+      .attr("class", "symbolic-hover-library-title")
+      .text("Best library match");
+
+    const body = hoverCardLibraryInfo.append("div")
+      .attr("class", "symbolic-hover-library-body");
+
+    body.append("span")
+      .attr("class", "symbolic-hover-library-chip")
+      .style("background-color", symbolicBestBasis.color || SYMBOLIC_LIBRARY_COMBINED_COLOR);
+
+    body.append("span")
+      .attr("class", "symbolic-hover-library-label")
+      .text(`${symbolicBestBasis.entry.label}`);
+
+    hoverCardLibraryInfo.append("div")
+      .attr("class", "symbolic-hover-library-score")
+      .text(`Scale factor: ${formatLibraryNumber(symbolicBestBasis.coefficient)}`);
+
+    hoverCardLibraryInfo.append("div")
+      .attr("class", "symbolic-hover-library-rmse")
+      .text(`RMSE vs target: ${formatLibraryNumber(symbolicBestBasis.rmse)}`);
+  }
+}
+
 function refreshSymbolicLibraryUI(): void {
   renderSymbolicLibraryCatalog();
   renderSymbolicLibrarySelection();
@@ -2112,6 +2239,7 @@ function removeSymbolicLibraryEntry(id: string): void {
 function updateSymbolicLibraryFit(samples?: SymbolicSample[]): SymbolicLibraryFit | null {
   if (state.problem !== Problem.SYMBOLIC || !symbolicResult || !symbolicResult.isValid) {
     symbolicLibraryFit = null;
+    setSymbolicBestBasis(null);
     if (!samples) {
       refreshSymbolicLibraryUI();
     } else {
@@ -2123,6 +2251,7 @@ function updateSymbolicLibraryFit(samples?: SymbolicSample[]): SymbolicLibraryFi
     state.symbolicLibrarySelection.filter(id => !!getSymbolicLibraryEntry(id)) : [];
   if (selectedIds.length === 0) {
     symbolicLibraryFit = null;
+    setSymbolicBestBasis(null);
     if (!samples) {
       refreshSymbolicLibraryUI();
     } else {
@@ -2144,25 +2273,34 @@ function updateSymbolicLibraryFit(samples?: SymbolicSample[]): SymbolicLibraryFi
 
 function computeSymbolicLibraryFitFromEvaluator(entries: SymbolicLibraryEntry[], result: SymbolicDatasetResult): SymbolicLibraryFit | null {
   if (!entries.length || !result || !result.evaluator) {
+    setSymbolicBestBasis(null);
     return null;
   }
   let xs: number[] = [];
   let target: number[] = [];
+  let normalizedTarget: number[] = [];
+  const normalizationScale = result.normalizationScale || 1;
   for (let i = 0; i < SYMBOLIC_PREVIEW_SAMPLES; i++) {
     const x = -1 + (2 * i) / Math.max(1, SYMBOLIC_PREVIEW_SAMPLES - 1);
     xs.push(x);
     target.push(safeLibraryValue(result.evaluator(x)));
+    normalizedTarget.push(safeLibraryValue(result.normalizedEvaluator ? result.normalizedEvaluator(x) : result.evaluator(x) / normalizationScale));
   }
+  setSymbolicBestBasis(computeBestSingleBasis(entries, xs, normalizationScale, normalizedTarget));
   return computeSymbolicLibraryFitInternal(entries, xs, target);
 }
 
 function computeSymbolicLibraryFitFromSamples(entries: SymbolicLibraryEntry[], samples: SymbolicSample[]): SymbolicLibraryFit | null {
   if (!entries.length || !samples || !samples.length) {
+    setSymbolicBestBasis(null);
     return null;
   }
   const xs = samples.map(sample => sample.x);
-  const target = samples.map(sample => safeLibraryValue(sample.predicted));
-  return computeSymbolicLibraryFitInternal(entries, xs, target);
+  const targetRaw = samples.map(sample => safeLibraryValue(sample.target));
+  const targetNormalized = samples.map(sample => safeLibraryValue(sample.targetNormalized));
+  const normalizationScale = symbolicResult ? (symbolicResult.normalizationScale || 1) : 1;
+  setSymbolicBestBasis(computeBestSingleBasis(entries, xs, normalizationScale, targetNormalized));
+  return computeSymbolicLibraryFitInternal(entries, xs, targetRaw);
 }
 
 function computeSymbolicLibraryFitInternal(entries: SymbolicLibraryEntry[], xs: number[], target: number[]): SymbolicLibraryFit | null {
@@ -2330,6 +2468,7 @@ function updateProblemSpecificUI(): void {
     state.x = true;
   }
   refreshSymbolicLibraryUI();
+  updateHoverCardSymbolicOverlay();
 }
 
 let firstInteraction = true;
@@ -2382,6 +2521,7 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
       hoverCardSplineChart.clear();
       hoverCardSplineChart = null;
     }
+    hoverCardLibraryInfo = null;
     currentHoverCardEdge = null;
     return;
   }
@@ -2418,6 +2558,7 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
 
   // Clear existing content
   hovercard.selectAll("*").remove();
+  hoverCardLibraryInfo = null;
 
   if (type === HoverType.WEIGHT) {
     let edge = nodeOrEdge as kan.KANEdge;
@@ -2535,6 +2676,16 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
     const inputHistogramData = edge.getNormalizedHistogram();
     const outputHistogramData = edge.getNormalizedOutputHistogram();
     hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData);
+    updateHoverCardSymbolicOverlay();
+
+    if (state.problem === Problem.SYMBOLIC) {
+      hoverCardLibraryInfo = hovercard.append("div")
+        .attr("class", "symbolic-hover-library-summary");
+    } else {
+      hoverCardLibraryInfo = null;
+    }
+
+    updateHoverCardSymbolicOverlay();
 
     currentHoverCardEdge = edge;
   }

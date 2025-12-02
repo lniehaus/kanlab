@@ -1296,6 +1296,49 @@ footer .links a:hover {
   font-family: "Courier New", monospace;
 }
 
+#hovercard .symbolic-hover-library-summary {
+  border-top: 1px solid #e0e0e0;
+  margin-top: 6px;
+  padding: 8px 10px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+#hovercard .symbolic-hover-library-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #666;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+
+#hovercard .symbolic-hover-library-body {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+#hovercard .symbolic-hover-library-chip {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+#hovercard .symbolic-hover-library-label {
+  font-weight: 600;
+  color: #333;
+}
+
+#hovercard .symbolic-hover-library-score,
+#hovercard .symbolic-hover-library-rmse {
+  font-size: 11px;
+  color: #555;
+}
+
 .symbolic-library-basis-line {
   pointer-events: none;
 }

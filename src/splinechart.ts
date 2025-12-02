@@ -85,6 +85,8 @@ export class SplineChart {
   private isDragging: boolean = false;
   private targetYDomain: [number, number] | null = null;
   private smoothingTimer: any = null;
+  private overlayPoints: Array<{ x: number, y: number }> | null = null;
+  private overlayColor: string = "#388e3c";
 
   constructor(container: any, userSettings?: SplineChartSettings) {
     if (userSettings != null) {
@@ -382,6 +384,7 @@ export class SplineChart {
     this.svg.selectAll(".knot-line").remove();
     this.svg.selectAll(".activation-histogram").remove();
     this.svg.selectAll(".output-histogram").remove();
+    this.svg.selectAll(".spline-overlay-curve").remove();
     // Clear old control paths only if showOldControlPaths is false
     if (!this.settings.showOldControlPaths) {
       this.svg.selectAll(".control-polygon").remove();
@@ -409,6 +412,8 @@ export class SplineChart {
     if (this.settings.showKnots) {
       this.drawKnots();
     }
+
+    this.drawOverlayCurve();
   }
 
   private updateYScale(): void {
@@ -520,6 +525,29 @@ export class SplineChart {
       .style("stroke", "#1B998B")
       .style("stroke-width", 3)
       .style("stroke-linecap", "round");
+  }
+
+  private drawOverlayCurve(): void {
+    this.svg.selectAll(".spline-overlay-curve").remove();
+    if (!this.overlayPoints || this.overlayPoints.length === 0) {
+      return;
+    }
+
+    const line = d3.svg.line<{ x: number, y: number }>()
+      .x((d: { x: number, y: number }) => this.xScale(d.x))
+      .y((d: { x: number, y: number }) => this.yScale(d.y))
+      .interpolate("basis");
+
+    this.svg.append("path")
+      .datum(this.overlayPoints)
+      .attr("class", "spline-overlay-curve")
+      .attr("d", line)
+      .style("fill", "none")
+      .style("stroke", this.overlayColor)
+      .style("stroke-width", 2)
+      .style("stroke-dasharray", "4,2")
+      .style("opacity", 0.9)
+      .style("pointer-events", "none");
   }
 
   private drawControlPoints(): void {
@@ -785,7 +813,9 @@ export class SplineChart {
     this.svg.selectAll(".control-point").remove();
     this.svg.selectAll(".control-polygon").remove();
     this.svg.selectAll(".knot-line").remove();
+    this.svg.selectAll(".spline-overlay-curve").remove();
     this.currentFunction = null;
+    this.overlayPoints = null;
   }
 
   /**
@@ -899,6 +929,14 @@ export class SplineChart {
    */
   setOnControlPointChange(callback: (index: number, newValue: number) => void): void {
     this.onControlPointChange = callback;
+  }
+
+  setOverlayCurve(points: Array<{ x: number, y: number }> | null, options?: { color?: string }): void {
+    this.overlayPoints = points ? points.map(p => ({ x: p.x, y: p.y })) : null;
+    if (options && options.color) {
+      this.overlayColor = options.color;
+    }
+    this.drawOverlayCurve();
   }
 
   /**
