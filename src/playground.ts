@@ -872,14 +872,35 @@ function drawNetwork(network: kan.KANNode[][]): void {
   );
   d3.select(".column.features").style("height", height + "px");
 
-  // Position the #heatmap div to align with the output layer node
+  // Position the #heatmap div and .metrics div to align with the output layer node
   const outputNode = kan.getKANOutputNode(network);
   const outputNodePos = node2coord[outputNode.id];
   if (outputNodePos) {
     // Calculate the top position: output node's cy position minus half the heatmap size
     // The node canvas is positioned at cy - RECT_SIZE/2, so we align the #heatmap with that
     const heatmapTop = outputNodePos.cy - RECT_SIZE / 2 + padding;
-    d3.select("#heatmap").style("margin-top", `${heatmapTop}px`);
+    
+    // Get the height of the .metrics div to position it above the heatmap
+    const metricsDiv = d3.select(".metrics").node() as HTMLElement;
+    const metricsHeight = metricsDiv ? metricsDiv.offsetHeight : 60; // Default 60px if not found
+    
+    // Add spacing between metrics and heatmap
+    const spacingBetween = 15; // 15px gap between metrics and heatmap
+    
+    // Get the h4 heading height to ensure we don't overlap with it
+    const outputH4 = d3.select(".column.output h4").node() as HTMLElement;
+    const h4Height = outputH4 ? outputH4.offsetHeight : 30; // Default ~30px if not found
+    
+    // Position .metrics div so that the heatmap appears right below it at the correct position
+    // But ensure it doesn't overlap with the h4 heading by setting a minimum margin
+    const desiredMetricsTop = heatmapTop - metricsHeight - spacingBetween;
+    const minMetricsTop = h4Height; // Minimum space to clear the h4 heading
+    const metricsTop = Math.max(desiredMetricsTop, minMetricsTop);
+    
+    d3.select(".metrics").style("margin-top", `${metricsTop}px`);
+    
+    // Position heatmap with spacing below metrics
+    d3.select("#heatmap").style("margin-top", `${spacingBetween}px`);
   }
 }
 
