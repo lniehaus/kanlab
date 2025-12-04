@@ -454,7 +454,7 @@ export class NetworkLayoutManager {
       },
       target: {
         x: splinePosition.y,
-        y: splinePosition.x - this.splineChartWidth / 2
+        y: splinePosition.x - (this.splineChartWidth / 2) - 1
       }
     };
 
@@ -464,7 +464,7 @@ export class NetworkLayoutManager {
     const splineToTarget = {
       source: {
         x: splinePosition.y,
-        y: splinePosition.x + this.splineChartWidth / 2
+        y: splinePosition.x + (this.splineChartWidth / 2) + 1
       },
       target: {
         x: dest.cy + verticalOffset,

@@ -414,7 +414,7 @@ header h1 .optional {
 }
 
 .spline-chart.spline-hovered {
-  transform: scale(1.1);
+  transform: scale(1.05);
   opacity: 1.0;
 }
 

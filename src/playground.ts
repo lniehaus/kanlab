@@ -318,7 +318,7 @@ function makeGUI() {
     .classed("selected", true);
 
   d3.select("#add-layers").on("click", () => {
-    if (state.numHiddenLayers >= 3) {
+    if (state.numHiddenLayers >= 5) {
       return;
     }
     state.networkShape[state.numHiddenLayers] = 1;
