@@ -533,10 +533,10 @@ function updateWeightsUI(network: kan.KANNode[][], container, forceUpdate: boole
         // Calculate opacity based on edge and node active states
         let opacity = 1.0;
         if (!edge.isActive) {
-          opacity = 0.2;
+          opacity = 0.1;
         } else if (!edge.sourceNode.isActive || !edge.destNode.isActive) {
           // Also reduce opacity if either connected node is inactive
-          opacity = 0.2;
+          opacity = 0.1;
         }
         
         // Update the first link (source to spline chart) - use input activation std
