@@ -228,8 +228,6 @@ let lossTest = 0;
 let player = new Player();
 let lineChart = new AppendingLineChart(d3.select("#linechart"),
     ["#777", "black"]);
-// Add spline chart variable
-let splineChart: SplineChart = null;
 let edgeSplineCharts: {[edgeId: string]: SplineChart} = {};
 // Hover card spline chart
 let hoverCardSplineChart: SplineChart = null;
@@ -915,12 +913,6 @@ function drawLinkWithSplineChart(
   let dest = node2coord[edge.destNode.id];
   let edgeId = `${edge.sourceNode.id}-${edge.destNode.id}`;
   
-  // Get SVG dimensions and padding
-  let svg = d3.select("#svg");
-  let svgWidth = parseInt(svg.attr("width"));
-  let svgHeight = parseInt(svg.attr("height"));
-  let padding = 3;
-  
   // Use the globally calculated spline position
   let splineX = splinePosition.x;
   let splineY = splinePosition.y;
@@ -1463,13 +1455,6 @@ function simulationStarted() {
     eventLabel: state.tutorial == null ? '' : state.tutorial
   });
   parametersChanged = false;
-}
-
-function isCursorOverElement(element: HTMLElement, cursorX: number, cursorY: number): boolean {
-  if (!element) return false;
-  const rect = element.getBoundingClientRect();
-  return cursorX >= rect.left && cursorX <= rect.right &&
-         cursorY >= rect.top && cursorY <= rect.bottom;
 }
 
 function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge, coordinates?: number[]) {

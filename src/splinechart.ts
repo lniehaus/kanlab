@@ -945,8 +945,7 @@ export class SplineChart {
       .append("rect")
       .attr("class", "histogram-bar")
       .attr("x", (d: number, i: number) => {
-        const binStart = xMin + i * binWidth;
-        return this.xScale(binStart);
+        return this.xScale(xMin + i * binWidth);
       })
       .attr("y", (d: number) => histogramHeight - (d * histogramHeight)) // Start from bottom of histogram area
       .attr("width", (d: number, i: number) => {
@@ -1003,8 +1002,7 @@ export class SplineChart {
     bars.transition()
       .duration(50)
       .attr("x", (d: number, i: number) => {
-        const binStart = xMin + i * binWidth;
-        return this.xScale(binStart);
+        return this.xScale(xMin + i * binWidth);
       })
       .attr("y", (d: number) => histogramHeight - (d * histogramHeight))
       .attr("width", (d: number, i: number) => {
@@ -1046,15 +1044,13 @@ export class SplineChart {
       .attr("class", "output-histogram-bar")
       .attr("x", 0) // Start from left edge
       .attr("y", (d: number, i: number) => {
-        const binStart = yMin + i * binHeight;
         const binEnd = yMin + (i + 1) * binHeight;
         return this.yScale(binEnd); // yScale is inverted (higher y values = lower on screen)
       })
       .attr("width", (d: number) => d * histogramWidth)
       .attr("height", (d: number, i: number) => {
-        const binStart = yMin + i * binHeight;
         const binEnd = yMin + (i + 1) * binHeight;
-        return Math.max(1, Math.abs(this.yScale(binStart) - this.yScale(binEnd)) - 1);
+        return Math.max(1, Math.abs(this.yScale(yMin + i * binHeight) - this.yScale(binEnd)) - 1);
       })
       .style("fill", this.settings.outputHistogramColor || "#E24A90")
       .style("opacity", this.settings.histogramOpacity || 0.3)
@@ -1105,15 +1101,13 @@ export class SplineChart {
     bars.transition()
       .duration(50)
       .attr("y", (d: number, i: number) => {
-        const binStart = yMin + i * binHeight;
         const binEnd = yMin + (i + 1) * binHeight;
         return this.yScale(binEnd);
       })
       .attr("width", (d: number) => d * histogramWidth)
       .attr("height", (d: number, i: number) => {
-        const binStart = yMin + i * binHeight;
         const binEnd = yMin + (i + 1) * binHeight;
-        return Math.max(1, Math.abs(this.yScale(binStart) - this.yScale(binEnd)) - 1);
+        return Math.max(1, Math.abs(this.yScale(yMin + i * binHeight) - this.yScale(binEnd)) - 1);
       });
     
     // EXIT: Remove extra bars
