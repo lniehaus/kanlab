@@ -413,13 +413,17 @@ header h1 .optional {
   transition: transform 0.15s ease, opacity 0.15s ease;
 }
 
+.spline-chart .spline-chart-wrapper {
+  transition: border-color 0.15s ease;
+}
+
 .spline-chart.spline-hovered {
-  transform: scale(1.05);
+  transform: scale(1.03);
   opacity: 1.0;
 }
 
 .spline-chart.spline-hovered .spline-chart-wrapper {
-  border-color: #666;
+  border-color: #666 !important;
 }
 
 /* Main Part*/
@@ -774,8 +778,11 @@ g.column rect {
   box-shadow: 0 2px 5px rgba(0,0,0,0.2);
 }
 
+#network .canvas.inactive {
+  opacity: 0.3;
+}
+
 #network .canvas.inactive canvas {
-  opacity: 0.4;
   position: absolute;
   top: -2px;
   left: -2px;
@@ -783,10 +790,11 @@ g.column rect {
   border-radius: 3px;
   box-shadow: 0 2px 5px rgba(0,0,0,0.2);
   background-color: #e0e0e0;
+  opacity: 1;
 }
 
 #network .canvas.inactive svg {
-  opacity: 0.4;
+  opacity: 1;
 }
 
 #network .canvas.hovered canvas {
@@ -812,6 +820,7 @@ g.column rect {
 
 .spline-chart.inactive svg {
   filter: grayscale(100%);
+  opacity: 1;
 }
 
 /* Allow hover on inactive splines to show preview */

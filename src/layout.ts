@@ -450,7 +450,7 @@ export class NetworkLayoutManager {
     const sourceToSpline = {
       source: {
         x: source.cy,
-        y: source.cx + this.rectSize / 2 + 2
+        y: source.cx + (this.rectSize / 2) + 3
       },
       target: {
         x: splinePosition.y,
