@@ -805,12 +805,12 @@ function drawNetwork(network: kan.KANNode[][]): void {
       drawNode(pos.cx, pos.cy, nodeId, isInputLayer, container, node, isOutputLayer);
 
       // Show callout to thumbnails for hidden layers
+      // Position at the last hidden layer (layer before output layer)
       if (isHiddenLayer && node) {
+        const lastHiddenLayerIdx = numLayers - 2;
         const numNodes = network[layerIdx].length;
-        const nextNumNodes = network[layerIdx + 1].length;
-        if (idWithCallout == null &&
-            nodeIdx === numNodes - 1 &&
-            nextNumNodes <= numNodes) {
+        if (layerIdx === lastHiddenLayerIdx &&
+            nodeIdx === numNodes - 1) {
           calloutThumb.style({
             display: null,
             top: `${20 + padding + pos.cy}px`,
@@ -821,6 +821,17 @@ function drawNetwork(network: kan.KANNode[][]): void {
       }
     });
   });
+
+  // Find the hidden layer with the most spline charts
+  let maxSplineCount = 0;
+  let layerWithMostSplines = -1;
+  for (let layerIdx = 1; layerIdx < numLayers - 1; layerIdx++) { // Only hidden layers
+    const splineCount = edgesByLayer[layerIdx].length;
+    if (splineCount > maxSplineCount) {
+      maxSplineCount = splineCount;
+      layerWithMostSplines = layerIdx;
+    }
+  }
 
   // Draw all edges with spline charts using layout manager data
   for (let layerIdx = 1; layerIdx < numLayers; layerIdx++) {
@@ -842,21 +853,15 @@ function drawNetwork(network: kan.KANNode[][]): void {
         linkPath
       );
 
-      // Show callout to weights for appropriate edges
-      if (targetIdWithCallout == null && globalEdgeIdx === layerEdges.length - 1) {
-        const prevLayer = network[layerIdx - 1];
-        const lastNodePrevLayer = prevLayer[prevLayer.length - 1];
-        if (edge.sourceNode.id === lastNodePrevLayer.id &&
-            (edge.sourceNode.id !== idWithCallout || numLayers <= 5) &&
-            edge.destNode.id !== idWithCallout &&
-            prevLayer.length >= currentLayer.length) {
-          calloutWeights.style({
-            display: null,
-            top: `${splinePosition.y + SPLINE_CHART_SIZE_Y/2 + 5}px`,
-            left: `${splinePosition.x + 3}px`
-          });
-          targetIdWithCallout = edge.destNode.id;
-        }
+      // Show callout to weights at the last spline chart in the layer with most splines
+      if (layerIdx === layerWithMostSplines && 
+          globalEdgeIdx === layerEdges.length - 1) {
+        calloutWeights.style({
+          display: null,
+          top: `${splinePosition.y + SPLINE_CHART_SIZE_Y/2 + 5}px`,
+          left: `${splinePosition.x + 3}px`
+        });
+        targetIdWithCallout = edge.destNode.id;
       }
     });
   }
