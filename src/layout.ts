@@ -549,7 +549,8 @@ export class NetworkLayoutManager {
   calculateRequiredHeight(
     network: kan.KANNode[][],
     numInputs: number,
-    inputIds?: string[]
+    inputIds?: string[],
+    padding: number = 50
   ): number {
     // Calculate the maximum number of edges in any single layer
     let maxEdgesInLayer = 0;
@@ -604,7 +605,11 @@ export class NetworkLayoutManager {
     const inputColumnBottom = inputOffset + this.nodeIndexScale(numInputs);
     
     // Ensure SVG height accommodates the potentially extended input column
-    return Math.max(maxYForEdges, maxYForInputs, maxYForLayers, inputColumnBottom, 400);
+    maxYForEdges = maxYForEdges + padding;
+    maxYForInputs = maxYForInputs + padding;
+    maxYForLayers = maxYForLayers + padding;
+    const height = Math.max(maxYForEdges, maxYForInputs, maxYForLayers, inputColumnBottom, 400);
+    return height;
   }
 
   /**
