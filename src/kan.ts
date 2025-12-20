@@ -41,14 +41,14 @@ export class LearnableFunction {
   gridSize: number;
   degree: number;
   initNoise: number | "xavier" | "kaiming" | "lecun" | "linear";
-  inputRange: [number, number] = [-1, 1];
+  inputRange: [number, number] = [-6, 6];
   private fanIn: number;
   private fanOut: number;
   
   constructor(
     id: string,
     gridSize: number = 5,
-    range: [number, number] = [-1, 1],
+    range: [number, number] = [-6, 6],
     degree: number = 3,
     initNoise: number | "xavier" | "kaiming" | "lecun" | "linear" = 0.3,
     fanIn: number = 1,
@@ -296,8 +296,10 @@ export class KANEdge {
   activationHistogram: number[] = [];
   outputHistogram: number[] = [];
   histogramBins: number = 20;
-  histogramRange: [number, number] = [-1, 1];
+  histogramRange: [number, number] = [-6, 6];
   outputHistogramRange: [number, number] = [-1, 1];
+  histogramDecayFactor: number = 0.995; // Decay old counts: 0.99 = faster decay, 0.999 = slower decay
+  outputHistogramDecayFactor: number = 0.95; // Faster decay for outputs to respond quickly to control point changes
   
   // Track observed ranges for adaptive histograms
   private observedInputMin: number = Infinity;
@@ -319,7 +321,7 @@ export class KANEdge {
     this.sourceNode = source;
     this.destNode = dest;
     this.learnableFunction = new LearnableFunction(
-      this.id, gridSize, [-1, 1], degree, initNoise, fanIn, fanOut
+      this.id, gridSize, [-6, 6], degree, initNoise, fanIn, fanOut
     );
     
     const numControlPoints = gridSize + 1;
@@ -353,15 +355,16 @@ export class KANEdge {
   
   /** Record activation for histogram visualization */
   recordActivation(input: number): void {
+    // Apply decay to all bins to fade old data
+    for (let i = 0; i < this.histogramBins; i++) {
+      this.activationHistogram[i] *= this.histogramDecayFactor;
+    }
+    
     // Track observed range for adaptive histograms
     this.observedInputMin = Math.min(this.observedInputMin, input);
     this.observedInputMax = Math.max(this.observedInputMax, input);
     
-    // Clamp to range
-    input = Math.max(this.histogramRange[0], 
-                     Math.min(this.histogramRange[1], input));
-    
-    // Find bin index
+    // Find bin index (no clipping - values outside range go to edge bins)
     const [min, max] = this.histogramRange;
     const binWidth = (max - min) / this.histogramBins;
     const binIndex = Math.floor((input - min) / binWidth);
@@ -373,15 +376,16 @@ export class KANEdge {
   
   /** Record output for histogram visualization */
   recordOutput(output: number): void {
+    // Apply faster decay to output bins to quickly respond to control point changes
+    for (let i = 0; i < this.histogramBins; i++) {
+      this.outputHistogram[i] *= this.outputHistogramDecayFactor;
+    }
+    
     // Track observed range for adaptive histograms
     this.observedOutputMin = Math.min(this.observedOutputMin, output);
     this.observedOutputMax = Math.max(this.observedOutputMax, output);
     
-    // Clamp to range
-    output = Math.max(this.outputHistogramRange[0], 
-                      Math.min(this.outputHistogramRange[1], output));
-    
-    // Find bin index
+    // Find bin index (no clipping - values outside range go to edge bins)
     const [min, max] = this.outputHistogramRange;
     const binWidth = (max - min) / this.histogramBins;
     const binIndex = Math.floor((output - min) / binWidth);
@@ -468,6 +472,26 @@ export class KANEdge {
         this.observedOutputMax + outputPadding
       ];
     }
+  }
+  
+  /** Update output histogram range based on current spline output range */
+  updateOutputHistogramRange(): void {
+    if (!this.learnableFunction) return;
+    
+    // Sample the spline to find its actual output range
+    let minOutput = Infinity;
+    let maxOutput = -Infinity;
+    
+    for (let i = 0; i <= 100; i++) {
+      const x = -6 + (12 * i) / 100;
+      const y = this.learnableFunction.evaluate(x);
+      minOutput = Math.min(minOutput, y);
+      maxOutput = Math.max(maxOutput, y);
+    }
+    
+    // Add padding
+    const padding = Math.max(0.5, (maxOutput - minOutput) * 0.2);
+    this.outputHistogramRange = [minOutput - padding, maxOutput + padding];
   }
   
   /** Reset histogram */

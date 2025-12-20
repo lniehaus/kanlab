@@ -201,9 +201,9 @@ state.getHiddenProps().forEach(prop => {
 let boundary: {[id: string]: number[][]} = {};
 let selectedNodeId: string = null;
 // Plot the heatmap.
-let xDomain: [number, number] = [-1, 1];
+let xDomain: [number, number] = [-6, 6];
 let heatMap =
-    new HeatMap(314, DENSITY, xDomain, xDomain, d3.select("#heatmap"),
+    new HeatMap(320, DENSITY, xDomain, xDomain, d3.select("#heatmap"),
         {showAxes: true});
 let linkWidthScale = d3.scale.linear()
   .domain([0, 1])
@@ -567,7 +567,7 @@ function updateWeightsUI(network: kan.KANNode[][], container, forceUpdate: boole
             currentHoverCardEdge === edge) {
           const inputHistogramData = edge.getNormalizedHistogram();
           const outputHistogramData = edge.getNormalizedOutputHistogram();
-          hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData);
+          hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData, edge.outputHistogramRange);
         }
       }
     }
@@ -1006,7 +1006,7 @@ function drawLinkWithSplineChart(
     if (currentHoverCardEdge === edge && hoverCardSplineChart) {
       const inputHistogramData = edge.getNormalizedHistogram();
       const outputHistogramData = edge.getNormalizedOutputHistogram();
-      hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData);
+      hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData, edge.outputHistogramRange);
     }
     
     // Prevent event from bubbling to hover handlers
@@ -1349,7 +1349,7 @@ function drawDatasetThumbnails() {
     let data = dataGenerator(200, 0);
     data.forEach(function(d) {
       context.fillStyle = colorScale(d.label);
-      context.fillRect(w * (d.x + 1) / 2, h * (d.y + 1) / 2, 4, 4);
+      context.fillRect(w * (d.x + 6) / 12, h * (d.y + 6) / 12, 4, 4);
     });
     d3.select(canvas.parentNode).style("display", null);
   }
@@ -1571,6 +1571,9 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
     
     // Set callback to update the main network visualization when control points change
     hoverCardSplineChart.setOnControlPointChange((index: number, newValue: number) => {
+      // Update output histogram range to match new spline range
+      edge.updateOutputHistogramRange();
+      
       // Clear the histogram since the spline function has changed
       edge.resetHistogram();
       
@@ -1589,7 +1592,7 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
       // Update the hovercard's histogram display with fresh activation data
       const inputHistogramData = edge.getNormalizedHistogram();
       const outputHistogramData = edge.getNormalizedOutputHistogram();
-      hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData);
+      hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData, edge.outputHistogramRange);
       
       // Update link colors/widths for this specific edge using absolute std values
       const inputStdBoundary = 0.6;  // Typical std for inputs in [-1, 1] range
@@ -1643,7 +1646,7 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
     // Update with the learnable function and histogram data
     const inputHistogramData = edge.getNormalizedHistogram();
     const outputHistogramData = edge.getNormalizedOutputHistogram();
-    hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData);
+    hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData, edge.outputHistogramRange);
     currentHoverCardEdge = edge;
   }
 }
