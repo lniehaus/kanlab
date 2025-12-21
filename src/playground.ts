@@ -54,6 +54,7 @@ const DENSITY = 100;
 const SPLINE_CHART_SIZE_X = 30;
 const SPLINE_CHART_SIZE_Y = 30;
 const NODE_SPACING = 25;
+const HEATMAP_UPDATE_THROTTLE_MS = 32; // Throttle heatmap updates during drag
 
 // Helper: populate numControlPoints options based on degree
 function updateNumControlPointsOptionsForDegree(degreeVal: number, currentNumControlPoints?: number) {
@@ -245,6 +246,8 @@ let lastMousePosition: {x: number, y: number} = {x: 0, y: 0};
 let updateWeightsDebounceTimer: number | null = null;
 // Flag to track if an update is pending
 let updateWeightsPending: boolean = false;
+// Track last time heatmap was updated during control point drag
+let lastHeatmapUpdateTime: number = 0;
 
 function makeGUI() {
   d3.select("#reset-button").on("click", () => {
@@ -1122,6 +1125,26 @@ function drawLinkWithSplineChart(
 }
 
 /**
+ * Helper function to update all heatmaps after a network change.
+ * Computes the decision boundary and updates both main and node-specific heatmaps.
+ */
+function updateHeatmapsForNetwork(network: kan.KANNode[][]) {
+  updateDecisionBoundary(network, false);
+  
+  // Update the main heatmap
+  let selectedId = selectedNodeId != null ?
+      selectedNodeId : kan.getKANOutputNode(network).id;
+  heatMap.updateBackground(boundary[selectedId], state.discretize);
+  
+  // Update all node-specific heatmaps
+  d3.select("#network").selectAll("div.canvas")
+      .each(function(data: {heatmap: HeatMap, id: string}) {
+    data.heatmap.updateBackground(reduceMatrix(boundary[data.id], 10),
+        state.discretize);
+  });
+}
+
+/**
  * Given a KAN network, it asks the network for the output (prediction)
  * of every node in the network using inputs sampled on a square grid.
  * It returns a map where each key is the node ID and the value is a square
@@ -1615,6 +1638,13 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
             "stroke-width": linkWidthScale(normalizedOutputStd),
             "stroke": linkColorScale(normalizedOutputStd)
           });
+      
+      // Throttled heatmap updates during drag for visual feedback
+      const now = Date.now();
+      if (now - lastHeatmapUpdateTime >= HEATMAP_UPDATE_THROTTLE_MS) {
+        lastHeatmapUpdateTime = now;
+        updateHeatmapsForNetwork(network);
+      }
     });
     
     // Set callbacks for drag start and end to prevent hovercard from hiding during drag
@@ -1625,21 +1655,9 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
     hoverCardSplineChart.setOnDragEnd(() => {
       isDraggingControlPoint = false;
       
-      // NOW update expensive visualizations after drag is complete (forced because this is a user interaction)
+      // Final update after drag is complete (forced because this is a user interaction)
       updateWeightsUI(network, d3.select("g.core"), true);
-      updateDecisionBoundary(network, false);
-      
-      // Update the main heatmap
-      let selectedId = selectedNodeId != null ?
-          selectedNodeId : kan.getKANOutputNode(network).id;
-      heatMap.updateBackground(boundary[selectedId], state.discretize);
-      
-      // Update all node-specific heatmaps
-      d3.select("#network").selectAll("div.canvas")
-          .each(function(data: {heatmap: HeatMap, id: string}) {
-        data.heatmap.updateBackground(reduceMatrix(boundary[data.id], 10),
-            state.discretize);
-      });
+      updateHeatmapsForNetwork(network);
       
       // Don't hide the hovercard after drag - let the normal mouse leave handlers manage it
     });
