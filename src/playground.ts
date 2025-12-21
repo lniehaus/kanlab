@@ -858,7 +858,7 @@ function drawNetwork(network: kan.KANNode[][]): void {
           globalEdgeIdx === layerEdges.length - 1) {
         calloutWeights.style({
           display: null,
-          top: `${splinePosition.y + SPLINE_CHART_SIZE_Y/2 + 5}px`,
+          top: `${splinePosition.y + SPLINE_CHART_SIZE_Y/2 + 8}px`,
           left: `${splinePosition.x + 3}px`
         });
         targetIdWithCallout = edge.destNode.id;

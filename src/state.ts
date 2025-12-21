@@ -134,7 +134,7 @@ export class State {
   networkShape: number[] = [1];
   numControlPoints = 5; // KAN number of control points for spline functions
   degree = 3;   // KAN B-spline degree (1=linear, 3=cubic, etc.)
-  initNoise: number | "xavier" | "kaiming" | "lecun" = 0.3; // Allow strategies
+  initNoise: number | "xavier" | "linear" = 0.3; // Allow strategies
   x = true;
   y = true;
   xTimesY = false;
