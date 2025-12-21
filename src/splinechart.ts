@@ -164,7 +164,7 @@ export class SplineChart {
 
     // Set up scales
     this.xScale = d3.scale.linear()
-      .domain([-6, 6])
+      .domain(this.settings.interactive ? [-6.8, 6] : [-6, 6])
       .range([0, this.width]);
 
     this.yScale = d3.scale.linear()
@@ -213,7 +213,7 @@ export class SplineChart {
 
     // Update scales with new dimensions
     this.xScale = d3.scale.linear()
-      .domain([-6, 6])
+      .domain(this.settings.interactive ? [-6.8, 6] : [-6, 6])
       .range([0, this.width]);
 
     this.yScale = d3.scale.linear()
@@ -317,7 +317,7 @@ export class SplineChart {
   private addGrid(): void {
     // Vertical grid lines
     this.svg.append("g")
-      .attr("class", "grid")
+      .attr("class", "grid grid-vertical")
       .selectAll("line.vertical")
       .data(this.xScale.ticks(5))
       .enter()
@@ -332,7 +332,7 @@ export class SplineChart {
 
     // Horizontal grid lines
     this.svg.append("g")
-      .attr("class", "grid")
+      .attr("class", "grid grid-horizontal")
       .selectAll("line.horizontal")
       .data(this.yScale.ticks(5))
       .enter()
@@ -350,7 +350,7 @@ export class SplineChart {
    * Update the chart with a new learnable function
    * Uses D3's enter/update/exit pattern to preserve DOM elements and event handlers
    */
-  updateFunction(learnableFunction: LearnableFunction, inputHistogramData?: number[], outputHistogramData?: number[], outputHistogramRange?: [number, number]): void {
+  updateFunction(learnableFunction: LearnableFunction, inputHistogramData?: number[], outputHistogramData?: number[], outputHistogramRange?: [number, number], animated: boolean = true): void {
     this.currentFunction = learnableFunction;
     
     // Store output histogram range if provided
@@ -359,7 +359,7 @@ export class SplineChart {
     }
     
     // Update Y scale based on function range
-    this.updateYScale();
+    this.updateYScale(animated);
     
     // Use update pattern instead of remove/recreate for better performance
     // and to preserve event handlers 
@@ -406,7 +406,7 @@ export class SplineChart {
     }
   }
 
-  private updateYScale(): void {
+  private updateYScale(animated: boolean = true): void {
     if (!this.currentFunction) return;
 
     // Sample the function to determine Y range
@@ -451,39 +451,59 @@ export class SplineChart {
     // Update scale
     this.yScale.domain([minY, maxY]);
 
+    // Calculate tick values once to ensure axis and grid are perfectly synchronized
+    const tickValues = this.yScale.ticks(5);
+
     // Update Y axis
     let yAxis = d3.svg.axis()
       .scale(this.yScale)
       .orient("left");
 
     if (this.settings.showYAxisValues) {
-      yAxis.ticks(5);
+      yAxis.tickValues(tickValues); // Use exact tick values, not just a hint
     } else {
       yAxis.ticks(0);
     }
 
-    this.svg.select(".y.axis")
-      .transition()
-      .duration(200)
-      .call(yAxis);
+    let axisSelection = this.svg.select(".y.axis");
+    if (animated) {
+      axisSelection
+        .transition()
+        .duration(200)
+        .call(yAxis);
+    } else {
+      axisSelection.call(yAxis);
+    }
 
     // Update horizontal grid lines
     if (this.settings.showGrid) {
-      // Remove old grid lines and redraw them
-      this.svg.selectAll("line.horizontal").remove();
-      
-      this.svg.select(".grid")
-        .selectAll("line.horizontal")
-        .data(this.yScale.ticks(5))
-        .enter()
-        .append("line")
-        .attr("class", "horizontal")
-        .attr("x1", 0)
-        .attr("x2", this.width)
-        .attr("y1", (d: number) => this.yScale(d))
-        .attr("y2", (d: number) => this.yScale(d))
-        .style("stroke", "#e0e0e0")
-        .style("stroke-width", 1);
+      const gridGroup = this.svg.select(".grid-horizontal");
+      // Only update if the grid group actually exists
+      if (!gridGroup.empty()) {
+        // Use an axis component styled as grid lines to guarantee perfect alignment
+        let yGrid = d3.svg.axis()
+          .scale(this.yScale)
+          .orient("left")
+          .tickValues(tickValues)
+          .innerTickSize(-this.width) // Extend ticks across entire width
+          .outerTickSize(0)
+          .tickFormat(""); // No labels
+        
+        let gridSelection = gridGroup;
+        if (animated) {
+          gridSelection = gridSelection.transition().duration(200);
+        }
+        gridSelection
+          .call(yGrid)
+          .selectAll("line")
+          .attr("class", "horizontal")
+          .style("stroke", "#e0e0e0")
+          .style("stroke-width", 1);
+        
+        // Hide the axis path (the main vertical line)
+        this.svg.select(".grid-horizontal .domain")
+          .style("stroke", "none");
+      }
     }
   }
 
@@ -628,7 +648,7 @@ export class SplineChart {
             // Update axis with the final domain
             let yAxis = d3.svg.axis()
               .scale(this.yScale)
-              .orient("left");
+              .orient("left")
             if (this.settings.showYAxisValues) {
               yAxis.ticks(5);
             } else {
@@ -1148,8 +1168,8 @@ export class SplineChart {
     const [targetMin, targetMax] = this.targetYDomain;
     const [currentMin, currentMax] = currentDomain;
 
-    // Interpolation factor (0.15 = 15% of the way to target per frame)
-    const alpha = 0.15;
+    // Interpolation factor (0.25 = 25% of the way to target per frame)
+    const alpha = 0.25;
 
     // Calculate new domain
     const newMin = currentMin + (targetMin - currentMin) * alpha;
@@ -1172,36 +1192,49 @@ export class SplineChart {
       this.smoothingTimer = setTimeout(() => this.smoothYScale(), 16); // ~60fps
     }
 
-    // Update Y axis without transition (we're handling the smoothing manually)
+    // Calculate tick values once to ensure axis and grid are perfectly synchronized
+    const tickValues = this.yScale.ticks(5);
+    
+    // Update Y axis without transition (we're handling the smoothing manually via interpolation)
     let yAxis = d3.svg.axis()
       .scale(this.yScale)
       .orient("left");
 
     if (this.settings.showYAxisValues) {
-      yAxis.ticks(5);
+      yAxis.tickValues(tickValues); // Use exact tick values, not just a hint
     } else {
       yAxis.ticks(0);
     }
 
+    // No transition - update immediately to stay in sync with grid lines
     this.svg.select(".y.axis")
       .call(yAxis);
 
     // Update horizontal grid lines if shown
     if (this.settings.showGrid) {
-      this.svg.selectAll("line.horizontal").remove();
-      
-      this.svg.select(".grid")
-        .selectAll("line.horizontal")
-        .data(this.yScale.ticks(5))
-        .enter()
-        .append("line")
-        .attr("class", "horizontal")
-        .attr("x1", 0)
-        .attr("x2", this.width)
-        .attr("y1", (d: number) => this.yScale(d))
-        .attr("y2", (d: number) => this.yScale(d))
-        .style("stroke", "#e0e0e0")
-        .style("stroke-width", 1);
+      const gridGroup = this.svg.select(".grid-horizontal");
+      // Only update if the grid group actually exists
+      if (!gridGroup.empty()) {
+        // Use an axis component styled as grid lines to guarantee perfect alignment
+        let yGrid = d3.svg.axis()
+          .scale(this.yScale)
+          .orient("left")
+          .tickValues(tickValues)
+          .innerTickSize(-this.width) // Extend ticks across entire width
+          .outerTickSize(0)
+          .tickFormat(""); // No labels
+        
+        gridGroup
+          .call(yGrid)
+          .selectAll("line")
+          .attr("class", "horizontal")
+          .style("stroke", "#e0e0e0")
+          .style("stroke-width", 1);
+        
+        // Hide the axis path (the main vertical line)
+        this.svg.select(".grid-horizontal .domain")
+          .style("stroke", "none");
+      }
     }
   }
 

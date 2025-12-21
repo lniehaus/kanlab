@@ -1519,10 +1519,11 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
     }
   }
   
+  // Position hovercard but keep it hidden until fully configured
   hovercard.style({
     "left": finalX + "px",
     "top": finalY + "px",
-    "display": "block"
+    "display": "none"
   });
   
   // Clear existing content
@@ -1556,7 +1557,7 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
       showControlPoints: true,
       showOldControlPaths: false,
       showKnots: false,
-      showGrid: true,
+      showGrid: false,
       showXAxisLabels: true,
       showYAxisLabels: true,
       showXAxisValues: true,
@@ -1646,8 +1647,11 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
     // Update with the learnable function and histogram data
     const inputHistogramData = edge.getNormalizedHistogram();
     const outputHistogramData = edge.getNormalizedOutputHistogram();
-    hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData, edge.outputHistogramRange);
+    hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData, edge.outputHistogramRange, false);
     currentHoverCardEdge = edge;
+    
+    // Now that chart is fully configured with correct y-scale, make hovercard visible
+    hovercard.style("display", "block");
   }
 }
 
