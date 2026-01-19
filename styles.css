@@ -231,6 +231,9 @@ header h1 .optional {
 /* Top Controls */
 
 #top-controls {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
   border-bottom: 1px solid #ddd;
   padding: 18px 0;
   box-shadow: 0 1px 4px rgba(0,0,0,0.08);
@@ -373,6 +376,8 @@ header h1 .optional {
   max-width: 320px;
   top: -20px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  pointer-events: auto;
+  transition: opacity 0.2s ease;
 }
 
 #hovercard input {
@@ -385,6 +390,40 @@ header h1 .optional {
 
 #hovercard svg {
   display: block;
+}
+
+/* Interactive control points in hover card */
+#hovercard .control-point {
+  cursor: ns-resize;
+  transition: r 0.1s ease, stroke-width 0.1s ease;
+}
+
+#hovercard .control-point:hover {
+  r: 8;
+  stroke-width: 3;
+}
+
+#hovercard .control-point:active {
+  stroke-width: 3;
+  opacity: 0.8;
+}
+
+/* Spline chart hover effects - using CSS classes prevents event blocking during training */
+.spline-chart {
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.spline-chart .spline-chart-wrapper {
+  transition: border-color 0.15s ease;
+}
+
+.spline-chart.spline-hovered {
+  transform: scale(1.03);
+  opacity: 1.0;
+}
+
+.spline-chart.spline-hovered .spline-chart-wrapper {
+  border-color: #666 !important;
 }
 
 /* Main Part*/
@@ -705,7 +744,7 @@ g.column rect {
 }
 
 #network .node.inactive {
-  opacity: 0.5;
+  opacity: 0.3;
 }
 
 #network .node.hovered {
@@ -740,14 +779,18 @@ g.column rect {
 }
 
 #network .canvas.inactive canvas {
-  box-shadow: inherit;
+  opacity: 0.3;
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  border: 2px solid black;
+  border-radius: 3px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+  background-color: #e0e0e0;
 }
 
-#network .canvas.inactive canvas {
-  opacity: 0.4;
-  border: 0;
-  top: 0;
-  left: 0;
+#network .canvas.inactive svg {
+  opacity: 0.3;
 }
 
 #network .canvas.hovered canvas {
@@ -755,6 +798,29 @@ g.column rect {
   border: 2px solid #666;
   top: -2px;
   left: -2px;
+}
+
+/* Spline charts */
+
+.spline-chart {
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.15s ease;
+  border-radius: 3px;
+}
+
+/* Removed .spline-chart:hover - conflicts with JS hover handlers during DOM manipulation */
+
+.spline-chart.inactive {
+  opacity: 0.3;
+}
+
+.spline-chart.inactive svg {
+  filter: grayscale(100%);
+}
+
+/* Allow hover on inactive splines to show preview */
+.spline-chart.inactive.spline-hovered svg {
+  filter: grayscale(50%);
 }
 
 /* Hidden layers column */

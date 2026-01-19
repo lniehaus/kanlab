@@ -26,6 +26,7 @@ import {
 } from "./state";
 import {Example2D, shuffle} from "./dataset";
 import {AppendingLineChart} from "./linechart";
+import {NetworkLayoutManager} from "./layout";
 import * as d3 from 'd3';
 
 let mainWidth;
@@ -52,6 +53,8 @@ const NUM_SAMPLES_REGRESS = 1200;
 const DENSITY = 100;
 const SPLINE_CHART_SIZE_X = 30;
 const SPLINE_CHART_SIZE_Y = 30;
+const NODE_SPACING = 25;
+const HEATMAP_UPDATE_THROTTLE_MS = 32; // Throttle heatmap updates during drag
 
 // Helper: populate numControlPoints options based on degree
 function updateNumControlPointsOptionsForDegree(degreeVal: number, currentNumControlPoints?: number) {
@@ -160,6 +163,13 @@ class Player {
     if (this.callback) {
       this.callback(this.isPlaying);
     }
+    
+    // Clear any pending debounced updates when pausing
+    if (updateWeightsDebounceTimer !== null) {
+      clearTimeout(updateWeightsDebounceTimer);
+      updateWeightsDebounceTimer = null;
+      updateWeightsPending = false;
+    }
   }
 
   private start(localTimerIndex: number) {
@@ -192,13 +202,13 @@ state.getHiddenProps().forEach(prop => {
 let boundary: {[id: string]: number[][]} = {};
 let selectedNodeId: string = null;
 // Plot the heatmap.
-let xDomain: [number, number] = [-1, 1];
+let xDomain: [number, number] = [-6, 6];
 let heatMap =
-    new HeatMap(300, DENSITY, xDomain, xDomain, d3.select("#heatmap"),
+    new HeatMap(320, DENSITY, xDomain, xDomain, d3.select("#heatmap"),
         {showAxes: true});
 let linkWidthScale = d3.scale.linear()
   .domain([0, 1])
-  .range([0, 5]) // 0, 10
+  .range([1, 5]) // 0, 10
   .clamp(true);
 let colorScale = d3.scale.linear<string, number>()
                      .domain([-1, 0, 1])
@@ -206,8 +216,8 @@ let colorScale = d3.scale.linear<string, number>()
                      .clamp(true);
 
 let linkColorScale = d3.scale.linear<string, number>()
-                     .domain([-1, 0, 1])
-                     .range(["#ffffff", "#e8eaeb", "#6B6B6B"]) // #1B998B #7D2E68 #5A5A5A
+                     .domain([0, 1])
+                     .range(["#d0d0d0", "#6B6B6B"])
                      .clamp(true);
 
 let iter = 0;
@@ -219,13 +229,25 @@ let lossTest = 0;
 let player = new Player();
 let lineChart = new AppendingLineChart(d3.select("#linechart"),
     ["#777", "black"]);
-// Add spline chart variable
-let splineChart: SplineChart = null;
 let edgeSplineCharts: {[edgeId: string]: SplineChart} = {};
 // Hover card spline chart
 let hoverCardSplineChart: SplineChart = null;
 // Current edge being displayed in hover card
 let currentHoverCardEdge: kan.KANEdge = null;
+// Layout manager for coordinating positions
+let layoutManager: NetworkLayoutManager = null;
+// Timeout for hiding hover card with delay
+let hoverCardHideTimeout: number = null;
+// Track if user is currently dragging a control point
+let isDraggingControlPoint: boolean = false;
+// Track cursor position during interactions
+let lastMousePosition: {x: number, y: number} = {x: 0, y: 0};
+// Debounce timer for updateWeightsUI to prevent excessive DOM manipulation
+let updateWeightsDebounceTimer: number | null = null;
+// Flag to track if an update is pending
+let updateWeightsPending: boolean = false;
+// Track last time heatmap was updated during control point drag
+let lastHeatmapUpdateTime: number = 0;
 
 function makeGUI() {
   d3.select("#reset-button").on("click", () => {
@@ -297,7 +319,7 @@ function makeGUI() {
     .classed("selected", true);
 
   d3.select("#add-layers").on("click", () => {
-    if (state.numHiddenLayers >= 3) {
+    if (state.numHiddenLayers >= 5) {
       return;
     }
     state.networkShape[state.numHiddenLayers] = 1;
@@ -469,52 +491,73 @@ function makeGUI() {
   }
 }
 
-function updateWeightsUI(network: kan.KANNode[][], container) {
+function updateWeightsUI(network: kan.KANNode[][], container, forceUpdate: boolean = false) {
+  // Debounce DOM updates to prevent excessive manipulation during training
+  // This significantly improves event handling reliability (click, mouseleave)
+  if (!forceUpdate) {
+    if (updateWeightsDebounceTimer !== null) {
+      // An update is already scheduled, mark that another update is needed
+      updateWeightsPending = true;
+      return;
+    }
+    
+    // Schedule the update with a delay (~60 FPS limit)
+    updateWeightsDebounceTimer = window.setTimeout(() => {
+      updateWeightsDebounceTimer = null;
+      
+      // If another update was requested while waiting, perform it now
+      if (updateWeightsPending) {
+        updateWeightsPending = false;
+        updateWeightsUI(network, container, false);
+      }
+    }, 16); // 16ms = ~60 FPS
+  }
+  
+  // Use fixed boundaries for activation std (reasonable values based on typical activation ranges)
+  const inputStdBoundary = 0.6;  // 0.6 is Typical std for inputs in [-1, 1] range
+  const outputStdBoundary = 0.6; // 0.6 is Typical std for outputs in [-1, 1] range
+  
   for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
     let currentLayer = network[layerIdx];
     
-    // First pass: calculate all norms for this layer and find the maximum
-    let layerNorms: {[edgeId: string]: number} = {};
-    let maxNorm = 0;
-    
-    for (let i = 0; i < currentLayer.length; i++) {
-      let node = currentLayer[i];
-      for (let j = 0; j < node.inputEdges.length; j++) {
-        let edge = node.inputEdges[j];
-        let normWeight = Math.sqrt(edge.learnableFunction.controlPoints.reduce((sum, coeff) => sum + coeff * coeff, 0));
-        let edgeId = `${edge.sourceNode.id}-${edge.destNode.id}`;
-        layerNorms[edgeId] = normWeight;
-        maxNorm = Math.max(maxNorm, normWeight);
-      }
-    }
-    
-    // Avoid division by zero
-    if (maxNorm === 0) {
-      maxNorm = 1;
-    }
-    
-    // Second pass: update all the visual elements with normalized weights
+    // Update all the visual elements with absolute activation stds
     for (let i = 0; i < currentLayer.length; i++) {
       let node = currentLayer[i];
       for (let j = 0; j < node.inputEdges.length; j++) {
         let edge = node.inputEdges[j];
         let edgeId = `${edge.sourceNode.id}-${edge.destNode.id}`;
-        let normalizedWeight = layerNorms[edgeId] / maxNorm;
         
-        // Update the first link (source to spline chart)
+        // Use absolute std values clamped to [0, 1] range based on boundaries
+        let inputStd = edge.getInputActivationStd();
+        let outputStd = edge.getOutputActivationStd();
+        let normalizedInputStd = Math.min(1, inputStd / inputStdBoundary);
+        let normalizedOutputStd = Math.min(1, outputStd / outputStdBoundary);
+        
+        // Calculate opacity based on edge and node active states
+        let opacity = 1.0;
+        if (!edge.isActive) {
+          opacity = 0.1;
+        } else if (!edge.sourceNode.isActive || !edge.destNode.isActive) {
+          // Also reduce opacity if either connected node is inactive
+          opacity = 0.1;
+        }
+        
+        // Update the first link (source to spline chart) - use input activation std
         container.select(`#link${edgeId}-part1`)
             .style({
               "stroke-dashoffset": -iter / 3,
-              "stroke-width": linkWidthScale(normalizedWeight),
-              "stroke": linkColorScale(normalizedWeight)
+              "stroke-width": linkWidthScale(normalizedInputStd),
+              "stroke": linkColorScale(normalizedInputStd),
+              "opacity": opacity
             });
             
-        // Update the second link (spline chart to destination)
+        // Update the second link (spline chart to destination) - use output activation std
         container.select(`#link${edgeId}-part2`)
             .style({
               "stroke-dashoffset": -iter / 3,
-              "stroke-width": linkWidthScale(normalizedWeight),
-              "stroke": linkColorScale(normalizedWeight)
+              "stroke-width": linkWidthScale(normalizedOutputStd),
+              "stroke": linkColorScale(normalizedOutputStd),
+              "opacity": opacity
             });
             
         // Update the spline chart
@@ -525,7 +568,9 @@ function updateWeightsUI(network: kan.KANNode[][], container) {
         // Update hover card spline chart if it's showing this edge
         if (currentHoverCardEdge && hoverCardSplineChart && 
             currentHoverCardEdge === edge) {
-          hoverCardSplineChart.updateFunction(edge.learnableFunction);
+          const inputHistogramData = edge.getNormalizedHistogram();
+          const outputHistogramData = edge.getNormalizedOutputHistogram();
+          hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData, edge.outputHistogramRange);
         }
       }
     }
@@ -533,7 +578,7 @@ function updateWeightsUI(network: kan.KANNode[][], container) {
 }
 
 function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
-    container, node?: kan.KANNode) {
+    container, node?: kan.KANNode, isOutput: boolean = false) {
   let x = cx - RECT_SIZE / 2;
   let y = cy - RECT_SIZE / 2;
 
@@ -597,7 +642,8 @@ function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
     .style({
       position: "absolute",
       left: `${x + 3}px`,
-      top: `${y + 3}px`
+      top: `${y + 3}px`,
+      display: isOutput ? "none" : null
     })
     .on("mouseenter", function() {
       selectedNodeId = nodeId;
@@ -614,6 +660,8 @@ function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
       heatMap.updateBackground(boundary[kan.getKANOutputNode(network).id],
           state.discretize);
     });
+  
+  // Add click handlers
   if (isInput) {
     div.on("click", function() {
       state[nodeId] = !state[nodeId];
@@ -621,26 +669,61 @@ function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
       reset();
     });
     div.style("cursor", "pointer");
+  } else if (!isOutput && node) {
+    // Hidden layer nodes can be activated/deactivated
+    div.on("click", function() {
+      node.isActive = !node.isActive;
+      div.classed("inactive", !node.isActive);
+      nodeGroup.classed("inactive", !node.isActive);
+      
+      // Reset histograms for ALL edges in the network
+      for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
+        let currentLayer = network[layerIdx];
+        for (let i = 0; i < currentLayer.length; i++) {
+          let n = currentLayer[i];
+          for (let j = 0; j < n.inputEdges.length; j++) {
+            n.inputEdges[j].resetHistogram();
+          }
+        }
+      }
+      
+      // Repopulate histograms with current network state
+      trainData.forEach((point) => {
+        let input = constructInput(point.x, point.y);
+        kan.kanForwardProp(network, input, true);
+      });
+      
+      // Update visualizations (forced because this is a user interaction)
+      updateWeightsUI(network, d3.select("g.core"), true);
+      updateDecisionBoundary(network, false);
+      
+      let selectedId = selectedNodeId != null ?
+          selectedNodeId : kan.getKANOutputNode(network).id;
+      heatMap.updateBackground(boundary[selectedId], state.discretize);
+      
+      d3.select("#network").selectAll("div.canvas")
+          .each(function(data: {heatmap: HeatMap, id: string}) {
+        data.heatmap.updateBackground(reduceMatrix(boundary[data.id], 10),
+            state.discretize);
+      });
+    });
+    div.style("cursor", "pointer");
   }
+  
   if (isInput) {
     div.classed(activeOrNotClass, true);
   }
+  
+  // Apply initial active/inactive styling for hidden nodes
+  if (!isInput && !isOutput && node) {
+    div.classed("inactive", !node.isActive);
+    nodeGroup.classed("inactive", !node.isActive);
+  }
+  
   let nodeHeatMap = new HeatMap(RECT_SIZE, DENSITY / 10, xDomain,
       xDomain, div, {noSvg: true});
   div.datum({heatmap: nodeHeatMap, id: nodeId});
 
-}
-
-function getMaxLearnableFunctions(network: kan.KANNode[][]): number {
-  let maxSum = 0;
-  for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
-    let currentLayer = network[layerIdx];
-    let sum = currentLayer.reduce((acc, node) => acc + node.inputEdges.length, 0);
-    if (sum > maxSum) {
-      maxSum = sum;
-    }
-  }
-  return maxSum;
 }
 
 // Draw network
@@ -663,120 +746,127 @@ function drawNetwork(network: kan.KANNode[][]): void {
   let width = co.offsetLeft - cf.offsetLeft;
   svg.attr("width", width);
 
-  // Map of all node coordinates.
-  let node2coord: {[id: string]: {cx: number, cy: number}} = {};
+  // Get node IDs for input layer
+  let nodeIds = Object.keys(INPUTS);
+  
+  // Initialize layout manager with initial dimensions
+  layoutManager = new NetworkLayoutManager(
+    RECT_SIZE,
+    NODE_SPACING,
+    padding,
+    width,
+    600, // Initial height, will be updated
+    SPLINE_CHART_SIZE_X,
+    SPLINE_CHART_SIZE_Y
+  );
+  
+  // Calculate required height based on network structure
+  let maxY = layoutManager.calculateRequiredHeight(network, nodeIds.length, nodeIds);
+  svg.attr("height", maxY);
+  
+  // Update layout manager with final height
+  layoutManager.updateDimensions(width, maxY);
+
+  // Get complete layout from layout manager
+  const layout = layoutManager.getCompleteNetworkLayout(network, nodeIds);
+  const { layers, node2coord, edgesByLayer } = layout;
+
   let container = svg.append("g")
     .classed("core", true)
     .attr("transform", `translate(${padding},${padding})`);
-  // Draw the network layer by layer.
+
   let numLayers = network.length;
-  let featureWidth = 118;
-  let layerScale = d3.scale.ordinal<number, number>()
-      .domain(d3.range(1, numLayers - 1))
-      .rangePoints([featureWidth, width - RECT_SIZE], 0.7);
-  let nodeIndexScale = (nodeIndex: number) => nodeIndex * (RECT_SIZE + 25);
-  
-  // Calculate maxY before drawing anything
-  let nodeIds = Object.keys(INPUTS);
-  let maxLearnableFunctions = getMaxLearnableFunctions(network);
-  let maxY = nodeIndexScale(maxLearnableFunctions);
-
-  // Also consider the size of intermediate layers
-  for (let layerIdx = 1; layerIdx < numLayers - 1; layerIdx++) {
-    let numNodes = network[layerIdx].length;
-    maxY = Math.max(maxY, nodeIndexScale(numNodes));
-  }
-  
-  maxY = Math.max(maxY, 400);
-  // Set SVG height early based on calculated maxY
-  svg.attr("height", maxY);
-
   let calloutThumb = d3.select(".callout.thumbnail").style("display", "none");
   let calloutWeights = d3.select(".callout.weights").style("display", "none");
   let idWithCallout = null;
   let targetIdWithCallout = null;
 
-  // Draw the input layer separately.
-  let cx = RECT_SIZE / 2 + 50;
+  // Draw all layers using layout manager data
+  layers.forEach((layer, layerIdx) => {
+    const isInputLayer = layerIdx === 0;
+    const isOutputLayer = layerIdx === numLayers - 1;
+    const isHiddenLayer = !isInputLayer && !isOutputLayer;
 
-  nodeIds.forEach((nodeId, i) => {
-    let cy = nodeIndexScale(i) + RECT_SIZE / 2;
-    node2coord[nodeId] = {cx, cy};
-    drawNode(cx, cy, nodeId, true, container);
+    // Add plus/minus controls for hidden layers
+    if (isHiddenLayer) {
+      const layerX = layoutManager.calculateLayerX(layerIdx, numLayers);
+      addPlusMinusControl(layerX - RECT_SIZE / 2, layerIdx);
+    }
+
+    // Draw nodes for this layer
+    layer.nodePositions.forEach((pos, nodeIdx) => {
+      let nodeId: string;
+      let node: kan.KANNode | undefined;
+
+      if (isInputLayer) {
+        nodeId = nodeIds[nodeIdx];
+      } else {
+        node = network[layerIdx][nodeIdx];
+        nodeId = node.id;
+      }
+
+      drawNode(pos.cx, pos.cy, nodeId, isInputLayer, container, node, isOutputLayer);
+
+      // Show callout to thumbnails for hidden layers
+      // Position at the last hidden layer (layer before output layer)
+      if (isHiddenLayer && node) {
+        const lastHiddenLayerIdx = numLayers - 2;
+        const numNodes = network[layerIdx].length;
+        if (layerIdx === lastHiddenLayerIdx &&
+            nodeIdx === numNodes - 1) {
+          calloutThumb.style({
+            display: null,
+            top: `${20 + padding + pos.cy}px`,
+            left: `${layer.cx}px`
+          });
+          idWithCallout = node.id;
+        }
+      }
+    });
   });
 
-  // Draw the intermediate layers.
-  for (let layerIdx = 1; layerIdx < numLayers - 1; layerIdx++) {
-    let numNodes = network[layerIdx].length;
-    let cx = layerScale(layerIdx) + RECT_SIZE / 2;
-    addPlusMinusControl(layerScale(layerIdx), layerIdx);
-    for (let i = 0; i < numNodes; i++) {
-      let node = network[layerIdx][i];
-      let cy = nodeIndexScale(i) + RECT_SIZE / 2;
-      node2coord[node.id] = {cx, cy};
-      drawNode(cx, cy, node.id, false, container, node);
-
-      // Show callout to thumbnails.
-      let numNodes = network[layerIdx].length;
-      let nextNumNodes = network[layerIdx + 1].length;
-      if (idWithCallout == null &&
-          i === numNodes - 1 &&
-          nextNumNodes <= numNodes) {
-        calloutThumb.style({
-          display: null,
-          top: `${20 + 3 + cy}px`,
-          left: `${cx}px`
-        });
-        idWithCallout = node.id;
-      }
+  // Find the hidden layer with the most spline charts
+  let maxSplineCount = 0;
+  let layerWithMostSplines = -1;
+  for (let layerIdx = 1; layerIdx < numLayers - 1; layerIdx++) { // Only hidden layers
+    const splineCount = edgesByLayer[layerIdx].length;
+    if (splineCount > maxSplineCount) {
+      maxSplineCount = splineCount;
+      layerWithMostSplines = layerIdx;
     }
   }
 
-  // Draw the output node separately.
-  cx = width + RECT_SIZE / 2;
-  let node = network[numLayers - 1][0];
-  let cy = nodeIndexScale(0) + RECT_SIZE / 2;
-  node2coord[node.id] = {cx, cy};
-
-  // Calculate global spline chart positions for each layer
+  // Draw all edges with spline charts using layout manager data
   for (let layerIdx = 1; layerIdx < numLayers; layerIdx++) {
-    let splinePositions = calculateGlobalSplinePositions(network, layerIdx, node2coord);
+    const layerEdges = edgesByLayer[layerIdx];
+    const currentLayer = network[layerIdx];
     
-    // Draw all edges with spline charts for this layer
-    let currentLayer = network[layerIdx];
-    for (let nodeIdx = 0; nodeIdx < currentLayer.length; nodeIdx++) {
-      let node = currentLayer[nodeIdx];
+    layerEdges.forEach((edgeLayout, globalEdgeIdx) => {
+      const { edge, splinePosition, linkPath, edgeIndex, totalEdgesForNode } = edgeLayout;
       
-      for (let edgeIdx = 0; edgeIdx < node.inputEdges.length; edgeIdx++) {
-        let edge = node.inputEdges[edgeIdx];
-        let edgeKey = `${edge.sourceNode.id}-${edge.destNode.id}`;
-        let splinePosition = splinePositions[edgeKey];
-        
-        drawLinkWithSplineChart(edge, node2coord, network, container, 
-                              edgeIdx === 0, edgeIdx, node.inputEdges.length, 
-                              splinePosition);
-        
-        // Show callout to weights for the last edge of the last node in certain conditions
-        if (targetIdWithCallout == null &&
-            nodeIdx === currentLayer.length - 1 &&
-            edgeIdx === node.inputEdges.length - 1) {
-          let prevLayer = network[layerIdx - 1];
-          let lastNodePrevLayer = prevLayer[prevLayer.length - 1];
-          if (edge.sourceNode.id === lastNodePrevLayer.id &&
-              (edge.sourceNode.id !== idWithCallout || numLayers <= 5) &&
-              edge.destNode.id !== idWithCallout &&
-              prevLayer.length >= currentLayer.length) {
-            // Position callout at the spline chart location
-            calloutWeights.style({
-              display: null,
-              top: `${splinePosition.y + SPLINE_CHART_SIZE_Y/2 + 5}px`,
-              left: `${splinePosition.x + 3}px`
-            });
-            targetIdWithCallout = edge.destNode.id;
-          }
-        }
+      drawLinkWithSplineChart(
+        edge,
+        node2coord,
+        network,
+        container,
+        edgeIndex === 0,
+        edgeIndex,
+        totalEdgesForNode,
+        splinePosition,
+        linkPath
+      );
+
+      // Show callout to weights at the last spline chart in the layer with most splines
+      if (layerIdx === layerWithMostSplines && 
+          globalEdgeIdx === layerEdges.length - 1) {
+        calloutWeights.style({
+          display: null,
+          top: `${splinePosition.y + SPLINE_CHART_SIZE_Y/2 + 8}px`,
+          left: `${splinePosition.x + 3}px`
+        });
+        targetIdWithCallout = edge.destNode.id;
       }
-    }
+    });
   }
 
 
@@ -787,144 +877,70 @@ function drawNetwork(network: kan.KANNode[][]): void {
     getRelativeHeight(d3.select("#network"))
   );
   d3.select(".column.features").style("height", height + "px");
-}
 
-function calculateGlobalSplinePositions(
-  network: kan.KANNode[][], 
-  layerIdx: number, 
-  node2coord: {[id: string]: {cx: number, cy: number}}
-): {[edgeKey: string]: {x: number, y: number}} {
-  
-  // Use the same nodeIndexScale function that positions the heatmaps
-  let nodeIndexScale = (nodeIndex: number) => nodeIndex * (RECT_SIZE + 25);
-  
-  // Get SVG dimensions
-  let svg = d3.select("#svg");
-  let svgHeight = parseInt(svg.attr("height")) || 600; // fallback height
-  let padding = 3;
-
-  // Collect all edges for this layer and sort them by destination node position, then source node position
-  let allEdges: {edge: kan.KANEdge, sourceY: number, destY: number, destNodeIdx: number, sourceNodeIdx: number, edgeKey: string}[] = [];
-  
-  let currentLayer = network[layerIdx];
-  for (let nodeIdx = 0; nodeIdx < currentLayer.length; nodeIdx++) {
-    let node = currentLayer[nodeIdx];
-    for (let edgeIdx = 0; edgeIdx < node.inputEdges.length; edgeIdx++) {
-      let edge = node.inputEdges[edgeIdx];
-      let edgeKey = `${edge.sourceNode.id}-${edge.destNode.id}`;
-      let sourceCoord = node2coord[edge.sourceNode.id];
-      let destCoord = node2coord[edge.destNode.id];
-      
-      // Find source node index for proper alignment
-      let sourceNodeIdx = -1;
-      if (layerIdx === 1) {
-        // For first layer, find index in INPUTS
-        let inputIds = Object.keys(INPUTS);
-        for (let i = 0; i < inputIds.length; i++) {
-          if (inputIds[i] === edge.sourceNode.id) {
-            sourceNodeIdx = i;
-            break;
-          }
-        }
-      } else {
-        // For other layers, find index in previous layer
-        let prevLayer = network[layerIdx - 1];
-        for (let i = 0; i < prevLayer.length; i++) {
-          if (prevLayer[i].id === edge.sourceNode.id) {
-            sourceNodeIdx = i;
-            break;
-          }
-        }
-      }
-      
-      allEdges.push({
-        edge: edge,
-        sourceY: sourceCoord.cy,
-        destY: destCoord.cy,
-        destNodeIdx: nodeIdx,
-        sourceNodeIdx: sourceNodeIdx,
-        edgeKey: edgeKey
-      });
-    }
+  // Position the #heatmap div and .metrics div to align with the output layer node
+  const outputNode = kan.getKANOutputNode(network);
+  const outputNodePos = node2coord[outputNode.id];
+  if (outputNodePos) {
+    // Calculate the top position: output node's cy position minus half the heatmap size
+    // The node canvas is positioned at cy - RECT_SIZE/2, so we align the #heatmap with that
+    const heatmapTop = outputNodePos.cy - RECT_SIZE / 2 + padding;
+    
+    // Get the height of the .metrics div to position it above the heatmap
+    const metricsDiv = d3.select(".metrics").node() as HTMLElement;
+    const metricsHeight = metricsDiv ? metricsDiv.offsetHeight : 60; // Default 60px if not found
+    
+    // Add spacing between metrics and heatmap
+    const spacingBetween = 15; // 15px gap between metrics and heatmap
+    
+    // Get the h4 heading height to ensure we don't overlap with it
+    const outputH4 = d3.select(".column.output h4").node() as HTMLElement;
+    const h4Height = outputH4 ? outputH4.offsetHeight : 30; // Default ~30px if not found
+    
+    // Position .metrics div so that the heatmap appears right below it at the correct position
+    // But ensure it doesn't overlap with the h4 heading by setting a minimum margin
+    const desiredMetricsTop = heatmapTop - metricsHeight - spacingBetween;
+    const minMetricsTop = h4Height; // Minimum space to clear the h4 heading
+    const metricsTop = Math.max(desiredMetricsTop, minMetricsTop);
+    
+    d3.select(".metrics").style("margin-top", `${metricsTop}px`);
+    
+    // Position heatmap with spacing below metrics
+    d3.select("#heatmap").style("margin-top", `${spacingBetween}px`);
   }
-  
-  // Sort edges by destination node index first, then by source node index
-  // This groups edges going to the same destination node together and aligns with grid
-  allEdges.sort((a, b) => {
-    if (a.destNodeIdx !== b.destNodeIdx) {
-      return a.destNodeIdx - b.destNodeIdx;
-    }
-    return a.sourceNodeIdx - b.sourceNodeIdx;
-  });
-  
-  // Assign positions to each edge using the same grid system as heatmaps
-  let positions: {[edgeKey: string]: {x: number, y: number}} = {};
-  
-  allEdges.forEach((edgeInfo, index) => {
-    let sourceCoord = node2coord[edgeInfo.edge.sourceNode.id];
-    let destCoord = node2coord[edgeInfo.edge.destNode.id];
-    
-    let splineX = (sourceCoord.cx + destCoord.cx) / 2;
-    
-    // Align spline charts with the grid system used for heatmaps
-    // Position each spline chart at a grid position based on its index
-    let gridY = nodeIndexScale(index) + RECT_SIZE / 2;
-    
-    // Ensure the spline chart stays within bounds
-    let minY = padding + SPLINE_CHART_SIZE_Y / 2;
-    let maxY = svgHeight - padding - SPLINE_CHART_SIZE_Y / 2;
-    let splineY = Math.max(minY, Math.min(maxY, gridY));
-    
-    positions[edgeInfo.edgeKey] = {
-      x: splineX,
-      y: splineY
-    };
-  });
-  
-  return positions;
 }
 
 function drawLinkWithSplineChart(
     edge: kan.KANEdge, node2coord: {[id: string]: {cx: number, cy: number}},
     network: kan.KANNode[][], container,
     isFirst: boolean, index: number, length: number, 
-    splinePosition: {x: number, y: number}) {
+    splinePosition: {x: number, y: number},
+    linkPath?: {sourceToSpline: any, splineToTarget: any}) {
   
   let source = node2coord[edge.sourceNode.id];
   let dest = node2coord[edge.destNode.id];
   let edgeId = `${edge.sourceNode.id}-${edge.destNode.id}`;
   
-  // Get SVG dimensions and padding
-  let svg = d3.select("#svg");
-  let svgWidth = parseInt(svg.attr("width"));
-  let svgHeight = parseInt(svg.attr("height"));
-  let padding = 3;
-  
   // Use the globally calculated spline position
   let splineX = splinePosition.x;
   let splineY = splinePosition.y;
   
-  // Constrain spline chart position to stay within SVG bounds
-  let minX = padding + SPLINE_CHART_SIZE_X / 2;
-  let maxX = svgWidth - padding - SPLINE_CHART_SIZE_X / 2;
-  let minY = padding + SPLINE_CHART_SIZE_Y / 2;
-  let maxY = svgHeight - padding - SPLINE_CHART_SIZE_Y / 2;
-
-  splineX = Math.max(minX, Math.min(maxX, splineX));
-  splineY = Math.max(minY, Math.min(maxY, splineY));
-  
-  // Create spline chart div
+  // Create spline chart div with larger hover target
   let splineDiv = d3.select("#network").append("div")
     .attr("class", "spline-chart")
     .attr("id", `spline-${edgeId}`)
     .style({
       position: "absolute",
       left: `${splineX - SPLINE_CHART_SIZE_X / 2 + 1}px`,
-      top: `${splineY - SPLINE_CHART_SIZE_Y / 2}px`,
+      top: `${splineY - SPLINE_CHART_SIZE_Y / 2 + 3}px`,
       width: `${SPLINE_CHART_SIZE_X}px`,
       height: `${SPLINE_CHART_SIZE_Y}px`,
       "z-index": "10",
-      "pointer-events": "auto"
+      "pointer-events": "auto",
+      "padding": "5px", // Increase hover target area
+      "margin": "-5px", // Compensate for padding to maintain visual position
+      "cursor": "pointer",
+      "transition": "transform 0.15s ease, opacity 0.15s ease"
     });
 
   // Create spline chart
@@ -948,26 +964,117 @@ function drawLinkWithSplineChart(
   
   // Update spline chart with the learnable function
   splineChart.updateFunction(edge.learnableFunction);
+  
+  // Apply initial active/inactive styling
+  splineDiv.classed("inactive", !edge.isActive);
 
-  // Add hover functionality to spline chart div
+  // Add click handler to toggle active state
+  splineDiv.on("click", function() {
+    edge.isActive = !edge.isActive;
+    splineDiv.classed("inactive", !edge.isActive);
+    
+    // Reset histograms for ALL edges in the network, not just this one
+    // This ensures recalculation from scratch with the new network state
+    for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
+      let currentLayer = network[layerIdx];
+      for (let i = 0; i < currentLayer.length; i++) {
+        let node = currentLayer[i];
+        for (let j = 0; j < node.inputEdges.length; j++) {
+          node.inputEdges[j].resetHistogram();
+        }
+      }
+    }
+    
+    // Repopulate histograms with current network state
+    trainData.forEach((point) => {
+      let input = constructInput(point.x, point.y);
+      kan.kanForwardProp(network, input, true);
+    });
+    
+    // Update visualizations (forced because this is a user interaction)
+    updateWeightsUI(network, d3.select("g.core"), true);
+    updateDecisionBoundary(network, false);
+    
+    let selectedId = selectedNodeId != null ?
+        selectedNodeId : kan.getKANOutputNode(network).id;
+    heatMap.updateBackground(boundary[selectedId], state.discretize);
+    
+    d3.select("#network").selectAll("div.canvas")
+        .each(function(data: {heatmap: HeatMap, id: string}) {
+      data.heatmap.updateBackground(reduceMatrix(boundary[data.id], 10),
+          state.discretize);
+    });
+    
+    // Update hover card if it's showing this edge
+    if (currentHoverCardEdge === edge && hoverCardSplineChart) {
+      const inputHistogramData = edge.getNormalizedHistogram();
+      const outputHistogramData = edge.getNormalizedOutputHistogram();
+      hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData, edge.outputHistogramRange);
+    }
+    
+    // Prevent event from bubbling to hover handlers
+    const clickEvent = d3.event as Event;
+    if (clickEvent.stopPropagation) {
+      clickEvent.stopPropagation();
+    }
+  });
+
+  // Add hover functionality to spline chart div (single source of hover state)
   splineDiv.on("mouseenter", function() {
+    // Visual feedback on hover using CSS class (prevents event queue blocking)
+    d3.select(this)
+      .classed("spline-hovered", true)
+      .style("z-index", "15"); // Elevate z-index on hover
+    
     updateHoverCard(HoverType.WEIGHT, edge, [splineX, splineY]);
   }).on("mouseleave", function() {
-    updateHoverCard(null);
+    // Reset visual feedback using CSS class
+    d3.select(this)
+      .classed("spline-hovered", false)
+      .style("z-index", "10"); // Reset z-index
+    
+    // Don't hide if user is dragging a control point
+    if (isDraggingControlPoint) {
+      return;
+    }
+    // Longer delay to allow smooth mouse movement to hovercard
+    hoverCardHideTimeout = setTimeout(() => {
+      updateHoverCard(null);
+    }, 100);
+  }).on("mousemove", function() {
+    // Track cursor position
+    const event = d3.event as MouseEvent;
+    lastMousePosition = {x: event.pageX, y: event.pageY};
+    
+    // Cancel hide timeout if mouse is still moving over the spline chart
+    if (hoverCardHideTimeout !== null) {
+      clearTimeout(hoverCardHideTimeout);
+      hoverCardHideTimeout = null;
+    }
   });
 
   // Draw first link: source node to spline chart
   let line1 = container.insert("path", ":first-child");
-  let datum1 = {
-    source: {
-      y: source.cx + RECT_SIZE / 2 + 2,
-      x: source.cy
-    },
-    target: {
-      y: splineX - SPLINE_CHART_SIZE_X / 2,
-      x: splineY
-    }
-  };
+  let datum1;
+  if (linkPath) {
+    // Use pre-calculated path from layout manager
+    datum1 = {
+      source: { y: linkPath.sourceToSpline.source.y, x: linkPath.sourceToSpline.source.x },
+      target: { y: linkPath.sourceToSpline.target.y, x: linkPath.sourceToSpline.target.x }
+    };
+  } else {
+    // Fallback to manual calculation
+    datum1 = {
+      source: {
+        y: source.cx + RECT_SIZE / 2 + 2,
+        x: source.cy
+      },
+      target: {
+        y: splineX - SPLINE_CHART_SIZE_X / 2,
+        x: splineY
+      }
+    };
+  }
   let diagonal = d3.svg.diagonal().projection(d => [d.y, d.x]);
   line1.attr({
     "marker-start": "url(#markerArrow)",
@@ -978,16 +1085,26 @@ function drawLinkWithSplineChart(
 
   // Draw second link: spline chart to destination node
   let line2 = container.insert("path", ":first-child");
-  let datum2 = {
-    source: {
-      y: splineX + SPLINE_CHART_SIZE_X / 2,
-      x: splineY
-    },
-    target: {
-      y: dest.cx - RECT_SIZE / 2,
-      x: dest.cy + ((index - (length - 1) / 2) / length) * 12
-    }
-  };
+  let datum2;
+  if (linkPath) {
+    // Use pre-calculated path from layout manager
+    datum2 = {
+      source: { y: linkPath.splineToTarget.source.y, x: linkPath.splineToTarget.source.x },
+      target: { y: linkPath.splineToTarget.target.y, x: linkPath.splineToTarget.target.x }
+    };
+  } else {
+    // Fallback to manual calculation
+    datum2 = {
+      source: {
+        y: splineX + SPLINE_CHART_SIZE_X / 2,
+        x: splineY
+      },
+      target: {
+        y: dest.cx - RECT_SIZE / 2,
+        x: dest.cy + ((index - (length - 1) / 2) / length) * 12
+      }
+    };
+  }
   line2.attr({
     "marker-start": "url(#markerArrow)",
     class: "link",
@@ -1005,6 +1122,26 @@ function drawLinkWithSplineChart(
     .attr("class", "link-hover");
 
   return [line1, line2];
+}
+
+/**
+ * Helper function to update all heatmaps after a network change.
+ * Computes the decision boundary and updates both main and node-specific heatmaps.
+ */
+function updateHeatmapsForNetwork(network: kan.KANNode[][]) {
+  updateDecisionBoundary(network, false);
+  
+  // Update the main heatmap
+  let selectedId = selectedNodeId != null ?
+      selectedNodeId : kan.getKANOutputNode(network).id;
+  heatMap.updateBackground(boundary[selectedId], state.discretize);
+  
+  // Update all node-specific heatmaps
+  d3.select("#network").selectAll("div.canvas")
+      .each(function(data: {heatmap: HeatMap, id: string}) {
+    data.heatmap.updateBackground(reduceMatrix(boundary[data.id], 10),
+        state.discretize);
+  });
 }
 
 /**
@@ -1043,7 +1180,7 @@ function updateDecisionBoundary(network: kan.KANNode[][], firstTime: boolean) {
       let x = xScale(i);
       let y = yScale(j);
       let input = constructInput(x, y);
-      kan.kanForwardProp(network, input);
+      kan.kanForwardProp(network, input, false);
       kan.forEachKANNode(network, true, node => {
         boundary[node.id][i][j] = node.output;
       });
@@ -1062,15 +1199,15 @@ function getLoss(network: kan.KANNode[][], dataPoints: Example2D[]): number {
   for (let i = 0; i < dataPoints.length; i++) {
     let dataPoint = dataPoints[i];
     let input = constructInput(dataPoint.x, dataPoint.y);
-    let output = kan.kanForwardProp(network, input);
+    let output = kan.kanForwardProp(network, input, false);
     loss += kan.Errors.SQUARE.error(output, dataPoint.label);
   }
   return loss / dataPoints.length;
 }
 
 function updateUI(firstStep = false) {
-  // Update the links visually.
-  updateWeightsUI(network, d3.select("g.core"));
+  // Update the links visually (debounced during training for better performance)
+  updateWeightsUI(network, d3.select("g.core"), false);
   // Get the decision boundary of the network.
   updateDecisionBoundary(network, firstStep);
   let selectedId = selectedNodeId != null ?
@@ -1164,6 +1301,13 @@ function reset(onStartup=false) {
     userHasInteracted();
   }
   player.pause();
+  
+  // Clear any pending debounced updates
+  if (updateWeightsDebounceTimer !== null) {
+    clearTimeout(updateWeightsDebounceTimer);
+    updateWeightsDebounceTimer = null;
+    updateWeightsPending = false;
+  }
 
   let suffix = state.numHiddenLayers !== 1 ? "s" : "";
   d3.select("#layers-label").text("Hidden layer" + suffix);
@@ -1178,6 +1322,13 @@ function reset(onStartup=false) {
   const derivedGridSize = Math.max(1, Math.floor(state.numControlPoints) - 1);
 
   network = kan.buildKANNetwork(shape, constructInputIds(), derivedGridSize, state.degree, state.initNoise);
+  
+  // Populate histograms with initial forward passes using training data
+  trainData.forEach((point) => {
+    let input = constructInput(point.x, point.y);
+    kan.kanForwardProp(network, input, true);
+  });
+  
   lossTrain = getLoss(network, trainData);
   lossTest = getLoss(network, testData);
   drawNetwork(network);
@@ -1221,7 +1372,7 @@ function drawDatasetThumbnails() {
     let data = dataGenerator(200, 0);
     data.forEach(function(d) {
       context.fillStyle = colorScale(d.label);
-      context.fillRect(w * (d.x + 1) / 2, h * (d.y + 1) / 2, 4, 4);
+      context.fillRect(w * (d.x + 6) / 12, h * (d.y + 6) / 12, 4, 4);
     });
     d3.select(canvas.parentNode).style("display", null);
   }
@@ -1337,6 +1488,12 @@ function simulationStarted() {
 function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge, coordinates?: number[]) {
   let hovercard = d3.select("#hovercard");
   
+  // Clear any pending hide timeout
+  if (hoverCardHideTimeout !== null) {
+    clearTimeout(hoverCardHideTimeout);
+    hoverCardHideTimeout = null;
+  }
+  
   if (type == null) {
     // Hide the hover card immediately
     hovercard.style("display", "none");
@@ -1352,32 +1509,44 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
   // Position the hover card below the spline chart
   let finalX, finalY;
   
+  // Get scroll position for accurate positioning
+  const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
+  const scrollY = window.pageYOffset || document.documentElement.scrollTop;
+  
   // For weight hover cards, position below the spline chart
   // Center the hover card horizontally relative to the spline chart
   finalX = coordinates[0] - 150; // Center 300px hover card around spline chart
-  finalY = coordinates[1] + (SPLINE_CHART_SIZE_Y / 2) + 10; // Position below spline chart with 10px gap
+  finalY = coordinates[1] + (SPLINE_CHART_SIZE_Y / 2) + 15; // Position below spline chart with 15px gap
   
-  // Ensure hover card stays within viewport bounds
+  // Ensure hover card stays within viewport bounds (accounting for scroll)
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  
   // Prevent going off left edge
-  if (finalX < 10) {
-    finalX = 10;
+  if (finalX - scrollX < 10) {
+    finalX = scrollX + 10;
   }
   
   // Prevent going off right edge (300px hover card width + padding)
-  if (finalX + 310 > window.innerWidth) {
-    finalX = window.innerWidth - 310;
+  if (finalX - scrollX + 310 > viewportWidth) {
+    finalX = scrollX + viewportWidth - 310;
   }
   
-  // Prevent going off bottom edge (200px hover card height + padding)
-  if (finalY + 210 > window.innerHeight) {
+  // Prevent going off bottom edge (estimated 350px hover card height + padding)
+  if (finalY - scrollY + 350 > viewportHeight) {
     // If no room below, position above the spline chart
-    finalY = coordinates[1] - (SPLINE_CHART_SIZE_Y / 2) - 210;
+    finalY = coordinates[1] - (SPLINE_CHART_SIZE_Y / 2) - 360;
+    // Ensure it doesn't go off the top
+    if (finalY - scrollY < 10) {
+      finalY = scrollY + 10;
+    }
   }
   
+  // Position hovercard but keep it hidden until fully configured
   hovercard.style({
     "left": finalX + "px",
     "top": finalY + "px",
-    "display": "block"
+    "display": "none"
   });
   
   // Clear existing content
@@ -1411,17 +1580,96 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
       showControlPoints: true,
       showOldControlPaths: false,
       showKnots: false,
-      showGrid: true,
+      showGrid: false,
       showXAxisLabels: true,
       showYAxisLabels: true,
       showXAxisValues: true,
       showYAxisValues: true,
-      showBorder: false
+      showBorder: false,
+      showActivationHistogram: true,
+      histogramOpacity: 0.3,
+      histogramColor: "#4A90E2",
+      outputHistogramColor: "#4A90E2",
+      interactive: true
     });
     
-    // Update with the learnable function and track the current edge
-    hoverCardSplineChart.updateFunction(edge.learnableFunction);
+    // Set callback to update the main network visualization when control points change
+    hoverCardSplineChart.setOnControlPointChange((index: number, newValue: number) => {
+      // Update output histogram range to match new spline range
+      edge.updateOutputHistogramRange();
+      
+      // Clear the histogram since the spline function has changed
+      edge.resetHistogram();
+      
+      // Run forward passes with training data to repopulate histograms
+      trainData.forEach((point) => {
+        let input = constructInput(point.x, point.y);
+        kan.kanForwardProp(network, input, true);
+      });
+      
+      // Only update the edge visualization immediately (lightweight)
+      let edgeId = `${edge.sourceNode.id}-${edge.destNode.id}`;
+      if (edgeSplineCharts[edgeId]) {
+        edgeSplineCharts[edgeId].updateFunction(edge.learnableFunction);
+      }
+      
+      // Update the hovercard's histogram display with fresh activation data
+      const inputHistogramData = edge.getNormalizedHistogram();
+      const outputHistogramData = edge.getNormalizedOutputHistogram();
+      hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData, edge.outputHistogramRange);
+      
+      // Update link colors/widths for this specific edge using absolute std values
+      const inputStdBoundary = 0.6;  // Typical std for inputs in [-1, 1] range
+      const outputStdBoundary = 0.6; // Typical std for outputs in [-1, 1] range
+      
+      const inputStd = edge.getInputActivationStd();
+      const outputStd = edge.getOutputActivationStd();
+      const normalizedInputStd = Math.min(1, inputStd / inputStdBoundary);
+      const normalizedOutputStd = Math.min(1, outputStd / outputStdBoundary);
+      
+      let svgContainer = d3.select("g.core");
+      svgContainer.select(`#link${edgeId}-part1`)
+          .style({
+            "stroke-width": linkWidthScale(normalizedInputStd),
+            "stroke": linkColorScale(normalizedInputStd)
+          });
+      svgContainer.select(`#link${edgeId}-part2`)
+          .style({
+            "stroke-width": linkWidthScale(normalizedOutputStd),
+            "stroke": linkColorScale(normalizedOutputStd)
+          });
+      
+      // Throttled heatmap updates during drag for visual feedback
+      const now = Date.now();
+      if (now - lastHeatmapUpdateTime >= HEATMAP_UPDATE_THROTTLE_MS) {
+        lastHeatmapUpdateTime = now;
+        updateHeatmapsForNetwork(network);
+      }
+    });
+    
+    // Set callbacks for drag start and end to prevent hovercard from hiding during drag
+    hoverCardSplineChart.setOnDragStart(() => {
+      isDraggingControlPoint = true;
+    });
+    
+    hoverCardSplineChart.setOnDragEnd(() => {
+      isDraggingControlPoint = false;
+      
+      // Final update after drag is complete (forced because this is a user interaction)
+      updateWeightsUI(network, d3.select("g.core"), true);
+      updateHeatmapsForNetwork(network);
+      
+      // Don't hide the hovercard after drag - let the normal mouse leave handlers manage it
+    });
+    
+    // Update with the learnable function and histogram data
+    const inputHistogramData = edge.getNormalizedHistogram();
+    const outputHistogramData = edge.getNormalizedOutputHistogram();
+    hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData, edge.outputHistogramRange, false);
     currentHoverCardEdge = edge;
+    
+    // Now that chart is fully configured with correct y-scale, make hovercard visible
+    hovercard.style("display", "block");
   }
 }
 
@@ -1483,6 +1731,70 @@ function getRelativeHeight(selection: d3.Selection<any>) {
 drawDatasetThumbnails();
 initTutorial();
 makeGUI();
+
+// Set up hovercard event handlers to keep it visible when mouse is over it
+// and hide it when mouse leaves it
+// Use native DOM addEventListener with capture:true to catch events from child elements
+const hovercardElement = document.getElementById("hovercard");
+
+hovercardElement.addEventListener("mouseenter", function() {
+  // Cancel any pending hide timeout when mouse enters hovercard
+  if (hoverCardHideTimeout !== null) {
+    clearTimeout(hoverCardHideTimeout);
+    hoverCardHideTimeout = null;
+  }
+});
+
+hovercardElement.addEventListener("mousemove", function(event: MouseEvent) {
+  // Track cursor position
+  lastMousePosition = {x: event.pageX, y: event.pageY};
+}, true); // Use capture phase to catch events from child elements
+
+hovercardElement.addEventListener("mouseleave", function() {
+  // Don't hide the hovercard if user is dragging a control point
+  if (isDraggingControlPoint) {
+    return;
+  }
+  // Hide the hovercard when mouse leaves it
+  updateHoverCard(null);
+});
+
+// Global event handlers for improved interaction
+// Reset drag state on mouse up anywhere (failsafe)
+document.addEventListener("mouseup", function() {
+  if (isDraggingControlPoint) {
+    isDraggingControlPoint = false;
+  }
+});
+
+// Close hovercard on ESC key
+document.addEventListener("keydown", function(event: KeyboardEvent) {
+  if (event.key === "Escape" || event.keyCode === 27) {
+    updateHoverCard(null);
+  }
+});
+
+// Close hovercard when clicking outside (but not on spline charts or hovercard itself)
+document.addEventListener("click", function(event: MouseEvent) {
+  const target = event.target as HTMLElement;
+  
+  // Check if click is on hovercard or its children
+  if (hovercardElement.contains(target)) {
+    return;
+  }
+  
+  // Check if click is on a spline chart
+  const splineChart = target.closest('.spline-chart');
+  if (splineChart) {
+    return;
+  }
+  
+  // Otherwise, hide the hovercard
+  if (hovercardElement.style.display !== "none") {
+    updateHoverCard(null);
+  }
+});
+
 generateData(true);
 reset(true);
 hideControls();

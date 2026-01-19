@@ -27,9 +27,16 @@ export interface SplineChartSettings {
   showXAxisValues?: boolean;
   showYAxisValues?: boolean;
   showBorder?: boolean;
+  showActivationHistogram?: boolean;
+  histogramOpacity?: number;
+  histogramColor?: string;
+  outputHistogramColor?: string;
+  histogramSize?: number;
+  histogramGap?: number;
   title?: string;
   width?: number;
   height?: number;
+  interactive?: boolean;
 }
 
 /**
@@ -47,9 +54,16 @@ export class SplineChart {
     showXAxisValues: false,
     showYAxisValues: false,
     showBorder: false,
+    showActivationHistogram: false,
+    histogramOpacity: 0.3,
+    histogramColor: "#4A90E2",
+    outputHistogramColor: "#4A90E2",
+    histogramSize: 50,
+    histogramGap: 10,
     title: "Learnable Function",
     width: 300,
-    height: 200
+    height: 200,
+    interactive: false
   };
   
   protected svg: any;
@@ -64,6 +78,14 @@ export class SplineChart {
   private baseMargin = { top: 2, right: 2, bottom: 2, left: 2 };
   private margin = { top: 2, right: 2, bottom: 2, left: 2 };
   private currentFunction: LearnableFunction | null = null;
+  private dragBehavior: any = null;
+  private onControlPointChange: ((index: number, newValue: number) => void) | null = null;
+  private onDragStart: (() => void) | null = null;
+  private onDragEnd: (() => void) | null = null;
+  private isDragging: boolean = false;
+  private targetYDomain: [number, number] | null = null;
+  private smoothingTimer: any = null;
+  private outputHistogramRange: [number, number] = [-1, 1]; // Actual range where output data is collected
 
   constructor(container: any, userSettings?: SplineChartSettings) {
     if (userSettings != null) {
@@ -105,9 +127,17 @@ export class SplineChart {
       this.margin.bottom = 30; 
     }
 
-    // Reduce top margin if title exists
+    // Extend top margin for title and histogram
     if (this.settings.title && this.settings.title.trim() !== "") {
-      this.margin.top = 30; // Minimal margin to match bottom when no axes
+      this.margin.top = 30; // Minimal margin when title exists
+    }
+    
+    // Add additional space at top if histogram is shown (Seaborn joint plot style)
+    if (this.settings.showActivationHistogram) {
+      const histogramSize = this.settings.histogramSize || 50;
+      const histogramGap = this.settings.histogramGap || 10;
+      this.margin.top += histogramSize + histogramGap;
+      this.margin.right += histogramSize + histogramGap;
     }
   }
 
@@ -134,11 +164,11 @@ export class SplineChart {
 
     // Set up scales
     this.xScale = d3.scale.linear()
-      .domain([-1, 1])
+      .domain(this.settings.interactive ? [-6.8, 6] : [-6, 6])
       .range([0, this.width]);
 
     this.yScale = d3.scale.linear()
-      .domain([-2, 2])
+      .domain([-6, 6])
       .range([this.height, 0]);
 
     // Add axes
@@ -146,10 +176,12 @@ export class SplineChart {
 
     // Add title
     if (this.settings.title) {
+      // Position title above histogram if shown, otherwise just above plot
+      const titleY = this.settings.showActivationHistogram ? -70 : -10;
       this.svg.append("text")
         .attr("class", "spline-title")
         .attr("x", this.width / 2)
-        .attr("y", -10)
+        .attr("y", titleY)
         .attr("text-anchor", "middle")
         .style("font-size", "14px")
         .style("font-weight", "bold")
@@ -181,11 +213,11 @@ export class SplineChart {
 
     // Update scales with new dimensions
     this.xScale = d3.scale.linear()
-      .domain([-1, 1])
+      .domain(this.settings.interactive ? [-6.8, 6] : [-6, 6])
       .range([0, this.width]);
 
     this.yScale = d3.scale.linear()
-      .domain([-2, 2])
+      .domain([-6, 6])
       .range([this.height, 0]);
 
     // Add axes
@@ -193,10 +225,12 @@ export class SplineChart {
 
     // Add title
     if (this.settings.title) {
+      // Position title above histogram if shown, otherwise just above plot
+      const titleY = this.settings.showActivationHistogram ? -70 : -10;
       this.svg.append("text")
         .attr("class", "spline-title")
         .attr("x", this.width / 2)
-        .attr("y", -10)
+        .attr("y", titleY)
         .attr("text-anchor", "middle")
         .style("font-size", "14px")
         .style("font-weight", "bold")
@@ -214,36 +248,14 @@ export class SplineChart {
       this.chartContainer.style({
         "border": "2px solid black",
         "border-radius": "3px",
-        "box-shadow": "0 2px 5px rgba(0,0,0,0.2)",
-        "transition": "all 0.2s ease"
+        "box-shadow": "0 2px 5px rgba(0,0,0,0.2)"
       });
-      
-      // Add hover effects
-      this.chartContainer
-        .on("mouseenter", function() {
-          d3.select(this).style({
-            "opacity": "1.0",
-            "border": "2px solid #666"
-          });
-        })
-        .on("mouseleave", function() {
-          d3.select(this).style({
-            "opacity": null,
-            "border": "2px solid black"
-          });
-        });
     } else {
       this.chartContainer.style({
         "border": "none",
         "border-radius": "0",
-        "box-shadow": "none",
-        "transition": null
+        "box-shadow": "none"
       });
-      
-      // Remove hover effects
-      this.chartContainer
-        .on("mouseenter", null)
-        .on("mouseleave", null);
     }
   }
 
@@ -305,7 +317,7 @@ export class SplineChart {
   private addGrid(): void {
     // Vertical grid lines
     this.svg.append("g")
-      .attr("class", "grid")
+      .attr("class", "grid grid-vertical")
       .selectAll("line.vertical")
       .data(this.xScale.ticks(5))
       .enter()
@@ -320,7 +332,7 @@ export class SplineChart {
 
     // Horizontal grid lines
     this.svg.append("g")
-      .attr("class", "grid")
+      .attr("class", "grid grid-horizontal")
       .selectAll("line.horizontal")
       .data(this.yScale.ticks(5))
       .enter()
@@ -336,38 +348,65 @@ export class SplineChart {
 
   /**
    * Update the chart with a new learnable function
+   * Uses D3's enter/update/exit pattern to preserve DOM elements and event handlers
    */
-  updateFunction(learnableFunction: LearnableFunction): void {
+  updateFunction(learnableFunction: LearnableFunction, inputHistogramData?: number[], outputHistogramData?: number[], outputHistogramRange?: [number, number], animated: boolean = true): void {
     this.currentFunction = learnableFunction;
     
+    // Store output histogram range if provided
+    if (outputHistogramRange) {
+      this.outputHistogramRange = outputHistogramRange;
+    }
+    
     // Update Y scale based on function range
-    this.updateYScale();
+    this.updateYScale(animated);
     
-    // Clear previous function visualization
-    this.svg.selectAll(".spline-curve").remove();
-    this.svg.selectAll(".control-point").remove();
-    this.svg.selectAll(".knot-line").remove();
+    // Use update pattern instead of remove/recreate for better performance
+    // and to preserve event handlers 
     
-    // Clear old control paths only if showOldControlPaths is false
-    if (!this.settings.showOldControlPaths) {
+    // Update histograms FIRST (so they're behind the curve)
+    if (this.settings.showActivationHistogram) {
+      if (inputHistogramData && inputHistogramData.length > 0) {
+        this.updateActivationHistogram(inputHistogramData);
+      } else {
+        // Remove histograms if no data
+        this.svg.selectAll(".activation-histogram").remove();
+      }
+      
+      if (outputHistogramData && outputHistogramData.length > 0) {
+        this.updateOutputHistogram(outputHistogramData);
+      } else {
+        // Remove output histograms if no data
+        this.svg.selectAll(".output-histogram").remove();
+      }
+    } else {
+      // Remove histograms if not enabled
+      this.svg.selectAll(".activation-histogram").remove();
+      this.svg.selectAll(".output-histogram").remove();
+    }
+
+    // Update the spline curve (using transition instead of remove/create)
+    this.updateSplineCurve();
+
+    // Update control points if enabled (using D3 data binding)
+    if (this.settings.showControlPoints) {
+      this.updateControlPoints();
+    } else {
+      // Remove control points if not enabled
+      this.svg.selectAll(".control-point").remove();
       this.svg.selectAll(".control-polygon").remove();
     }
 
-    // Draw the spline curve
-    this.drawSplineCurve();
-
-    // Draw control points if enabled
-    if (this.settings.showControlPoints) {
-      this.drawControlPoints();
-    }
-
-    // Draw knots if enabled
+    // Update knots if enabled
     if (this.settings.showKnots) {
-      this.drawKnots();
+      this.updateKnots();
+    } else {
+      // Remove knots if not enabled
+      this.svg.selectAll(".knot-line").remove();
     }
   }
 
-  private updateYScale(): void {
+  private updateYScale(animated: boolean = true): void {
     if (!this.currentFunction) return;
 
     // Sample the function to determine Y range
@@ -376,7 +415,7 @@ export class SplineChart {
     let maxY = -Infinity;
 
     for (let i = 0; i <= numSamples; i++) {
-      const x = -1 + (2 * i) / numSamples;
+      const x = -6 + (12 * i) / numSamples;
       const y = this.currentFunction.evaluate(x);
       minY = Math.min(minY, y);
       maxY = Math.max(maxY, y);
@@ -396,8 +435,24 @@ export class SplineChart {
     minY -= padding;
     maxY += padding;
 
+    // For interactive charts, ensure minimum range of -1.1 to +1.1
+    if (this.settings.interactive) {
+      minY = Math.min(minY, -1.1);
+      maxY = Math.max(maxY, 1.1);
+    }
+
+    // If dragging, store target domain and apply smoothing
+    if (this.isDragging) {
+      this.targetYDomain = [minY, maxY];
+      this.smoothYScale();
+      return;
+    }
+
     // Update scale
     this.yScale.domain([minY, maxY]);
+
+    // Calculate tick values once to ensure axis and grid are perfectly synchronized
+    const tickValues = this.yScale.ticks(5);
 
     // Update Y axis
     let yAxis = d3.svg.axis()
@@ -405,33 +460,50 @@ export class SplineChart {
       .orient("left");
 
     if (this.settings.showYAxisValues) {
-      yAxis.ticks(5);
+      yAxis.tickValues(tickValues); // Use exact tick values, not just a hint
     } else {
       yAxis.ticks(0);
     }
 
-    this.svg.select(".y.axis")
-      .transition()
-      .duration(0) // 300
-      .call(yAxis);
+    let axisSelection = this.svg.select(".y.axis");
+    if (animated) {
+      axisSelection
+        .transition()
+        .duration(200)
+        .call(yAxis);
+    } else {
+      axisSelection.call(yAxis);
+    }
 
     // Update horizontal grid lines
     if (this.settings.showGrid) {
-      // Remove old grid lines and redraw them
-      this.svg.selectAll("line.horizontal").remove();
-      
-      this.svg.select(".grid")
-        .selectAll("line.horizontal")
-        .data(this.yScale.ticks(5))
-        .enter()
-        .append("line")
-        .attr("class", "horizontal")
-        .attr("x1", 0)
-        .attr("x2", this.width)
-        .attr("y1", (d: number) => this.yScale(d))
-        .attr("y2", (d: number) => this.yScale(d))
-        .style("stroke", "#e0e0e0")
-        .style("stroke-width", 1);
+      const gridGroup = this.svg.select(".grid-horizontal");
+      // Only update if the grid group actually exists
+      if (!gridGroup.empty()) {
+        // Use an axis component styled as grid lines to guarantee perfect alignment
+        let yGrid = d3.svg.axis()
+          .scale(this.yScale)
+          .orient("left")
+          .tickValues(tickValues)
+          .innerTickSize(-this.width) // Extend ticks across entire width
+          .outerTickSize(0)
+          .tickFormat(""); // No labels
+        
+        let gridSelection = gridGroup;
+        if (animated) {
+          gridSelection = gridSelection.transition().duration(200);
+        }
+        gridSelection
+          .call(yGrid)
+          .selectAll("line")
+          .attr("class", "horizontal")
+          .style("stroke", "#e0e0e0")
+          .style("stroke-width", 1);
+        
+        // Hide the axis path (the main vertical line)
+        this.svg.select(".grid-horizontal .domain")
+          .style("stroke", "none");
+      }
     }
   }
 
@@ -443,7 +515,7 @@ export class SplineChart {
     const lineData: Array<[number, number]> = [];
 
     for (let i = 0; i <= numPoints; i++) {
-      const x = -1 + (2 * i) / numPoints;
+      const x = -6 + (12 * i) / numPoints;
       const y = this.currentFunction.evaluate(x);
       lineData.push([this.xScale(x), this.yScale(y)]);
     }
@@ -465,6 +537,52 @@ export class SplineChart {
       .style("stroke-linecap", "round");
   }
 
+  /**
+   * Update spline curve using D3 transitions instead of remove/recreate
+   * This preserves the DOM element and is more performant
+   */
+  private updateSplineCurve(): void {
+    if (!this.currentFunction) return;
+
+    // Generate points along the spline curve
+    const numPoints = 200;
+    const lineData: Array<[number, number]> = [];
+
+    for (let i = 0; i <= numPoints; i++) {
+      const x = -6 + (12 * i) / numPoints;
+      const y = this.currentFunction.evaluate(x);
+      lineData.push([this.xScale(x), this.yScale(y)]);
+    }
+
+    // Create line generator
+    const line = d3.svg.line()
+      .x((d: [number, number]) => d[0])
+      .y((d: [number, number]) => d[1])
+      .interpolate("linear");
+
+    // Use D3 data binding pattern (enter/update/exit)
+    const curve = this.svg.selectAll(".spline-curve")
+      .data([lineData]); // Single element array for single curve
+
+    // ENTER: Create new curve if it doesn't exist
+    curve.enter()
+      .append("path")
+      .attr("class", "spline-curve")
+      .style("fill", "none")
+      .style("stroke", "#1B998B")
+      .style("stroke-width", 3)
+      .style("stroke-linecap", "round");
+
+    // UPDATE: Transition existing curve to new path
+    // Use CSS transform for smooth animation 
+    curve.transition()
+      .duration(50) // Fast transition for training
+      .attr("d", line);
+
+    // EXIT: Remove any extra curves (shouldn't happen, but good practice)
+    curve.exit().remove();
+  }
+
   private drawControlPoints(): void {
     if (!this.currentFunction) return;
 
@@ -475,24 +593,98 @@ export class SplineChart {
     // For clamped B-splines, control points are roughly uniformly distributed
     const controlPointData = controlPoints.map((y, i) => {
       // Approximate x position based on control point index
-      const x = -1 + (2 * i) / (numPoints - 1);
+      const x = -6 + (12 * i) / (numPoints - 1);
       return { x, y, index: i };
     });
 
+    // Create or update drag behavior if interactive
+    if (this.settings.interactive && !this.dragBehavior) {
+      this.dragBehavior = d3.behavior.drag()
+        .origin((d: any) => {
+          return { x: this.xScale(d.x), y: this.yScale(d.y) };
+        })
+        .on("dragstart", () => {
+          // Set dragging flag for smooth Y-axis transitions
+          this.isDragging = true;
+          // Notify that dragging has started
+          if (this.onDragStart) {
+            this.onDragStart();
+          }
+        })
+        .on("drag", (d: any) => {
+          // Update y position based on drag
+          const event: any = d3.event;
+          const newY = this.yScale.invert(event.y);
+          d.y = newY;
+          
+          // Update the control point in the function
+          if (this.currentFunction) {
+            this.currentFunction.controlPoints[d.index] = newY;
+          }
+          
+          // Update visual position
+          d3.select(event.sourceEvent.target)
+            .attr("cy", event.y);
+          
+          // Redraw the spline curve and control polygon
+          this.redrawCurve();
+          
+          // Notify callback if set
+          if (this.onControlPointChange) {
+            this.onControlPointChange(d.index, newY);
+          }
+        })
+        .on("dragend", () => {
+          // Clear dragging flag and ensure final update
+          this.isDragging = false;
+          if (this.smoothingTimer) {
+            clearTimeout(this.smoothingTimer);
+            this.smoothingTimer = null;
+          }
+          // Apply final target domain if it exists
+          if (this.targetYDomain) {
+            this.yScale.domain(this.targetYDomain);
+            this.targetYDomain = null;
+            // Update axis with the final domain
+            let yAxis = d3.svg.axis()
+              .scale(this.yScale)
+              .orient("left")
+            if (this.settings.showYAxisValues) {
+              yAxis.ticks(5);
+            } else {
+              yAxis.ticks(0);
+            }
+            this.svg.select(".y.axis").call(yAxis);
+          }
+          // Notify that dragging has ended
+          if (this.onDragEnd) {
+            this.onDragEnd();
+          }
+        });
+    }
+
     // Draw control points
-    this.svg.selectAll(".control-point")
+    const points = this.svg.selectAll(".control-point")
       .data(controlPointData)
       .enter()
       .append("circle")
       .attr("class", "control-point")
       .attr("cx", (d: any) => this.xScale(d.x))
       .attr("cy", (d: any) => this.yScale(d.y))
-      .attr("r", 4)
-      .style("fill", "#E67E22")
+      .attr("r", this.settings.interactive ? 6 : 4)
+      .style("fill", this.settings.interactive ? "#E67E22" : "#E67E22")
       .style("stroke", "#D35400")
       .style("stroke-width", 2)
-      .append("title")
-      .text((d: any) => `Control Point ${d.index}\nPosition: (${d.x.toFixed(2)}, ${d.y.toFixed(3)})`);
+      .style("cursor", this.settings.interactive ? "ns-resize" : "default");
+
+    // Add drag behavior if interactive
+    if (this.settings.interactive && this.dragBehavior) {
+      points.call(this.dragBehavior);
+    }
+
+    // Add tooltips
+    points.append("title")
+      .text((d: any) => `Control Point ${d.index}\nPosition: (${d.x.toFixed(2)}, ${d.y.toFixed(3)})${this.settings.interactive ? '\nDrag to adjust' : ''}`);
 
     // Draw lines connecting control points
     if (controlPointData.length > 1) {
@@ -531,6 +723,152 @@ export class SplineChart {
     }
   }
 
+  /**
+   * Update control points using D3 data binding pattern 
+   * This preserves DOM elements and event handlers
+   */
+  private updateControlPoints(): void {
+    if (!this.currentFunction) return;
+
+    const controlPoints = this.currentFunction.controlPoints;
+    const numPoints = controlPoints.length;
+
+    // Map control point indices to x positions
+    const controlPointData = controlPoints.map((y, i) => {
+      const x = -6 + (12 * i) / (numPoints - 1);
+      return { x, y, index: i };
+    });
+
+    // Create or update drag behavior if interactive
+    if (this.settings.interactive && !this.dragBehavior) {
+      this.dragBehavior = d3.behavior.drag()
+        .origin((d: any) => {
+          return { x: this.xScale(d.x), y: this.yScale(d.y) };
+        })
+        .on("dragstart", () => {
+          this.isDragging = true;
+          if (this.onDragStart) {
+            this.onDragStart();
+          }
+        })
+        .on("drag", (d: any) => {
+          const event: any = d3.event;
+          const newY = this.yScale.invert(event.y);
+          d.y = newY;
+          
+          if (this.currentFunction) {
+            this.currentFunction.controlPoints[d.index] = newY;
+          }
+          
+          d3.select(event.sourceEvent.target)
+            .attr("cy", event.y);
+          
+          this.redrawCurve();
+          
+          if (this.onControlPointChange) {
+            this.onControlPointChange(d.index, newY);
+          }
+        })
+        .on("dragend", () => {
+          this.isDragging = false;
+          if (this.smoothingTimer) {
+            clearTimeout(this.smoothingTimer);
+            this.smoothingTimer = null;
+          }
+          if (this.targetYDomain) {
+            this.yScale.domain(this.targetYDomain);
+            this.targetYDomain = null;
+            let yAxis = d3.svg.axis()
+              .scale(this.yScale)
+              .orient("left");
+            if (this.settings.showYAxisValues) {
+              yAxis.ticks(5);
+            } else {
+              yAxis.ticks(0);
+            }
+            this.svg.select(".y.axis").call(yAxis);
+          }
+          if (this.onDragEnd) {
+            this.onDragEnd();
+          }
+        });
+    }
+
+    // Use D3 data binding pattern (enter/update/exit)
+    const points = this.svg.selectAll(".control-point")
+      .data(controlPointData, (d: any) => d.index); // Key function for proper data binding
+
+    // ENTER: Create new control points if needed
+    const pointsEnter = points.enter()
+      .append("circle")
+      .attr("class", "control-point")
+      .attr("r", this.settings.interactive ? 6 : 4)
+      .style("fill", "#E67E22")
+      .style("stroke", "#D35400")
+      .style("stroke-width", 2)
+      .style("cursor", this.settings.interactive ? "ns-resize" : "default");
+
+    // Add drag behavior and tooltips to new points
+    if (this.settings.interactive && this.dragBehavior) {
+      pointsEnter.call(this.dragBehavior);
+    }
+    
+    pointsEnter.append("title");
+
+    // UPDATE: Transition existing points to new positions
+    points.transition()
+      .duration(50) // Fast transition for training
+      .attr("cx", (d: any) => this.xScale(d.x))
+      .attr("cy", (d: any) => this.yScale(d.y));
+
+    // Update tooltips
+    points.select("title")
+      .text((d: any) => `Control Point ${d.index}\nPosition: (${d.x.toFixed(2)}, ${d.y.toFixed(3)})${this.settings.interactive ? '\nDrag to adjust' : ''}`);
+
+    // EXIT: Remove extra control points
+    points.exit().remove();
+
+    // Update control polygon
+    this.updateControlPolygon(controlPointData);
+  }
+
+  /**
+   * Update control polygon connecting control points
+   */
+  private updateControlPolygon(controlPointData: any[]): void {
+    if (controlPointData.length <= 1) {
+      this.svg.selectAll(".control-polygon").remove();
+      return;
+    }
+
+    const controlLine = d3.svg.line()
+      .x((d: any) => this.xScale(d.x))
+      .y((d: any) => this.yScale(d.y))
+      .interpolate("linear");
+
+    // Use D3 data binding for control polygon
+    const polygon = this.svg.selectAll(".control-polygon")
+      .data([controlPointData]); // Single polygon
+
+    // ENTER: Create new polygon if needed
+    polygon.enter()
+      .append("path")
+      .attr("class", "control-polygon")
+      .style("fill", "none")
+      .style("stroke", "#E67E22")
+      .style("stroke-width", 1)
+      .style("stroke-dasharray", "5,5")
+      .style("opacity", 0.5);
+
+    // UPDATE: Transition to new path
+    polygon.transition()
+      .duration(50)
+      .attr("d", controlLine);
+
+    // EXIT: Remove extra polygons
+    polygon.exit().remove();
+  }
+
   private drawKnots(): void {
     if (!this.currentFunction) return;
 
@@ -562,6 +900,254 @@ export class SplineChart {
   }
 
   /**
+   * Update knots using D3 data binding
+   */
+  private updateKnots(): void {
+    if (!this.currentFunction) return;
+
+    const knots = this.currentFunction.knotVector;
+    const degree = this.currentFunction.degree;
+
+    // Filter out repeated knots at boundaries
+    const uniqueKnots = knots.filter((knot, i) => {
+      return i > degree && i < knots.length - degree - 1;
+    });
+
+    // Use D3 data binding for knot lines
+    const knotLines = this.svg.selectAll(".knot-line")
+      .data(uniqueKnots);
+
+    // ENTER: Create new knot lines
+    const knotLinesEnter = knotLines.enter()
+      .append("line")
+      .attr("class", "knot-line")
+      .attr("y1", 0)
+      .attr("y2", this.height)
+      .style("stroke", "#9C27B0")
+      .style("stroke-width", 2)
+      .style("stroke-dasharray", "3,3")
+      .style("opacity", 0.7);
+
+    knotLinesEnter.append("title");
+
+    // UPDATE: Transition knot lines to new positions
+    knotLines.transition()
+      .duration(50)
+      .attr("x1", (d: number) => this.xScale(d))
+      .attr("x2", (d: number) => this.xScale(d));
+
+    // Update tooltips
+    knotLines.select("title")
+      .text((d: number) => `Knot at x = ${d.toFixed(3)}`);
+
+    // EXIT: Remove extra knot lines
+    knotLines.exit().remove();
+  }
+
+  /**
+   * Draw activation histogram as semi-transparent bars above the main plot (Seaborn joint plot style)
+   */
+  private drawActivationHistogram(histogramData: number[]): void {
+    if (!histogramData || histogramData.length === 0) return;
+    
+    const numBins = histogramData.length;
+    const histogramHeight = this.settings.histogramSize || 50;
+    const histogramGap = this.settings.histogramGap || 10;
+    
+    // The histogram bins represent the range [-6, 6] (matching xScale domain)
+    const xMin = -6;
+    const xMax = 6;
+    const binWidth = (xMax - xMin) / numBins;
+    
+    // Create histogram group positioned above the main plot
+    const histogramGroup = this.svg.append("g")
+      .attr("class", "activation-histogram")
+      .attr("transform", `translate(0, ${-histogramHeight - histogramGap})`);
+    
+    // Draw bars (growing upward from bottom) using xScale for positioning
+    histogramGroup.selectAll("rect.histogram-bar")
+      .data(histogramData)
+      .enter()
+      .append("rect")
+      .attr("class", "histogram-bar")
+      .attr("x", (d: number, i: number) => {
+        return this.xScale(xMin + i * binWidth);
+      })
+      .attr("y", (d: number) => histogramHeight - (d * histogramHeight)) // Start from bottom of histogram area
+      .attr("width", (d: number, i: number) => {
+        const binStart = xMin + i * binWidth;
+        const binEnd = xMin + (i + 1) * binWidth;
+        return Math.max(1, this.xScale(binEnd) - this.xScale(binStart) - 1);
+      })
+      .attr("height", (d: number) => d * histogramHeight)
+      .style("fill", this.settings.histogramColor || "#4A90E2")
+      .style("opacity", this.settings.histogramOpacity || 0.3)
+      .style("pointer-events", "none");
+  }
+
+  /**
+   * Update activation histogram using D3 data binding
+   */
+  private updateActivationHistogram(histogramData: number[]): void {
+    if (!histogramData || histogramData.length === 0) {
+      this.svg.selectAll(".activation-histogram").remove();
+      return;
+    }
+    
+    const numBins = histogramData.length;
+    const histogramHeight = this.settings.histogramSize || 50;
+    const histogramGap = this.settings.histogramGap || 10;
+    
+    const xMin = -6;
+    const xMax = 6;
+    const binWidth = (xMax - xMin) / numBins;
+    
+    // Use D3 data binding for histogram group
+    let histogramGroup = this.svg.selectAll(".activation-histogram")
+      .data([histogramData]); // Single histogram group
+    
+    // ENTER: Create histogram group if it doesn't exist
+    histogramGroup.enter()
+      .append("g")
+      .attr("class", "activation-histogram")
+      .attr("transform", `translate(0, ${-histogramHeight - histogramGap})`);
+    
+    // Update bars using data binding
+    const bars = histogramGroup.selectAll("rect.histogram-bar")
+      .data((d: number[]) => d);
+    
+    // ENTER: Create new bars
+    bars.enter()
+      .append("rect")
+      .attr("class", "histogram-bar")
+      .style("fill", this.settings.histogramColor || "#4A90E2")
+      .style("opacity", this.settings.histogramOpacity || 0.3)
+      .style("pointer-events", "none");
+    
+    // UPDATE: Transition bars to new values
+    bars.transition()
+      .duration(50)
+      .attr("x", (d: number, i: number) => {
+        return this.xScale(xMin + i * binWidth);
+      })
+      .attr("y", (d: number) => histogramHeight - (d * histogramHeight))
+      .attr("width", (d: number, i: number) => {
+        const binStart = xMin + i * binWidth;
+        const binEnd = xMin + (i + 1) * binWidth;
+        return Math.max(1, this.xScale(binEnd) - this.xScale(binStart) - 1);
+      })
+      .attr("height", (d: number) => d * histogramHeight);
+    
+    // EXIT: Remove extra bars
+    bars.exit().remove();
+  }
+
+  /**
+   * Update output histogram using D3 data binding with adaptive bar density
+   * Scales histogram to cover entire y-axis, filling gaps with zeros
+   */
+  private updateOutputHistogram(histogramData: number[]): void {
+    if (!histogramData || histogramData.length === 0) {
+      this.svg.selectAll(".output-histogram").remove();
+      return;
+    }
+    
+    const numBins = histogramData.length;
+    const histogramWidth = this.settings.histogramSize || 50;
+    const histogramGap = this.settings.histogramGap || 10;
+    
+    // Use actual output histogram range (where data was collected)
+    const [dataMin, dataMax] = this.outputHistogramRange;
+    const dataBinHeight = (dataMax - dataMin) / numBins;
+    
+    // Get current yScale domain (entire visible y-axis range)
+    const yDomain = this.yScale.domain();
+    const [yMin, yMax] = yDomain;
+    const totalRange = yMax - yMin;
+    
+    // Create expanded histogram covering entire y-axis
+    // Use same number of bins as original for consistency
+    const expandedBinHeight = totalRange / numBins;
+    const expandedHistogram: number[] = [];
+    for (let i = 0; i < numBins; i++) {
+      expandedHistogram.push(0);
+    }
+    
+    // Map original histogram data into expanded bins using interpolation
+    for (let i = 0; i < numBins; i++) {
+      const dataBinCenter = dataMin + (i + 0.5) * dataBinHeight;
+      
+      // Check if this data bin falls within the visible range
+      if (dataBinCenter >= yMin && dataBinCenter <= yMax) {
+        // Calculate exact position in expanded bins (floating point)
+        const exactPosition = (dataBinCenter - yMin) / expandedBinHeight;
+        
+        // Get adjacent bin indices
+        const lowerIdx = Math.floor(exactPosition);
+        const upperIdx = Math.ceil(exactPosition);
+        
+        // Calculate interpolation weight
+        const weight = exactPosition - lowerIdx;
+        
+        // Distribute value across adjacent bins using linear interpolation
+        if (lowerIdx >= 0 && lowerIdx < numBins) {
+          expandedHistogram[lowerIdx] += histogramData[i] * (1 - weight);
+        }
+        if (upperIdx >= 0 && upperIdx < numBins && upperIdx !== lowerIdx) {
+          expandedHistogram[upperIdx] += histogramData[i] * weight;
+        }
+      }
+    }
+    
+    // Calculate fixed bar height (matching input histogram bar width)
+    const inputBinWidth = 12 / numBins; // xScale domain is always [-6, 6] = 12 units
+    const fixedBarHeight = this.xScale(inputBinWidth) - this.xScale(0);
+    
+    // Create display data from all bins
+    const displayData: Array<{index: number, value: number}> = [];
+    for (let i = 0; i < numBins; i++) {
+      displayData.push({ index: i, value: expandedHistogram[i] });
+    }
+    
+    // Use D3 data binding for histogram group
+    let histogramGroup = this.svg.selectAll(".output-histogram")
+      .data([displayData]); // Single histogram group
+    
+    // ENTER: Create histogram group if it doesn't exist
+    histogramGroup.enter()
+      .append("g")
+      .attr("class", "output-histogram")
+      .attr("transform", `translate(${this.width + histogramGap}, 0)`);
+    
+    // Update bars using data binding
+    const bars = histogramGroup.selectAll("rect.output-histogram-bar")
+      .data((d: any[]) => d, (d: any) => d.index); // Key function for proper binding
+    
+    // ENTER: Create new bars
+    bars.enter()
+      .append("rect")
+      .attr("class", "output-histogram-bar")
+      .attr("x", 0)
+      .style("fill", this.settings.outputHistogramColor || "#E24A90")
+      .style("opacity", this.settings.histogramOpacity || 0.3)
+      .style("pointer-events", "none");
+    
+    // UPDATE: Transition bars to new values
+    bars.transition()
+      .duration(50)
+      .attr("y", (d: any) => {
+        // Position bar at the CENTER of its bin range, offset by half the bar height
+        const binCenter = yMin + (d.index + 0.5) * expandedBinHeight;
+        return this.yScale(binCenter) - fixedBarHeight / 2;
+      })
+      .attr("width", (d: any) => d.value * histogramWidth)
+      .attr("height", fixedBarHeight - 1);
+    
+    // EXIT: Remove extra bars
+    bars.exit().remove();
+  }
+
+  /**
    * Clear the chart
    */
   clear(): void {
@@ -570,6 +1156,130 @@ export class SplineChart {
     this.svg.selectAll(".control-polygon").remove();
     this.svg.selectAll(".knot-line").remove();
     this.currentFunction = null;
+  }
+
+  /**
+   * Smoothly interpolate Y-axis scale towards target domain
+   */
+  private smoothYScale(): void {
+    if (!this.targetYDomain) return;
+
+    const currentDomain = this.yScale.domain();
+    const [targetMin, targetMax] = this.targetYDomain;
+    const [currentMin, currentMax] = currentDomain;
+
+    // Interpolation factor (0.25 = 25% of the way to target per frame)
+    const alpha = 0.25;
+
+    // Calculate new domain
+    const newMin = currentMin + (targetMin - currentMin) * alpha;
+    const newMax = currentMax + (targetMax - currentMax) * alpha;
+
+    // Check if we're close enough to target (within 0.01)
+    const isClose = Math.abs(newMin - targetMin) < 0.01 && Math.abs(newMax - targetMax) < 0.01;
+
+    if (isClose) {
+      // Snap to target
+      this.yScale.domain([targetMin, targetMax]);
+    } else {
+      // Apply interpolated domain
+      this.yScale.domain([newMin, newMax]);
+
+      // Schedule next smoothing step
+      if (this.smoothingTimer) {
+        clearTimeout(this.smoothingTimer);
+      }
+      this.smoothingTimer = setTimeout(() => this.smoothYScale(), 16); // ~60fps
+    }
+
+    // Calculate tick values once to ensure axis and grid are perfectly synchronized
+    const tickValues = this.yScale.ticks(5);
+    
+    // Update Y axis without transition (we're handling the smoothing manually via interpolation)
+    let yAxis = d3.svg.axis()
+      .scale(this.yScale)
+      .orient("left");
+
+    if (this.settings.showYAxisValues) {
+      yAxis.tickValues(tickValues); // Use exact tick values, not just a hint
+    } else {
+      yAxis.ticks(0);
+    }
+
+    // No transition - update immediately to stay in sync with grid lines
+    this.svg.select(".y.axis")
+      .call(yAxis);
+
+    // Update horizontal grid lines if shown
+    if (this.settings.showGrid) {
+      const gridGroup = this.svg.select(".grid-horizontal");
+      // Only update if the grid group actually exists
+      if (!gridGroup.empty()) {
+        // Use an axis component styled as grid lines to guarantee perfect alignment
+        let yGrid = d3.svg.axis()
+          .scale(this.yScale)
+          .orient("left")
+          .tickValues(tickValues)
+          .innerTickSize(-this.width) // Extend ticks across entire width
+          .outerTickSize(0)
+          .tickFormat(""); // No labels
+        
+        gridGroup
+          .call(yGrid)
+          .selectAll("line")
+          .attr("class", "horizontal")
+          .style("stroke", "#e0e0e0")
+          .style("stroke-width", 1);
+        
+        // Hide the axis path (the main vertical line)
+        this.svg.select(".grid-horizontal .domain")
+          .style("stroke", "none");
+      }
+    }
+  }
+
+  /**
+   * Redraw only the spline curve and control polygon (used during drag)
+   */
+  /**
+   * Redraw curve during drag (optimized with update pattern)
+   */
+  private redrawCurve(): void {
+    if (!this.currentFunction) return;
+
+    // Use update methods instead of remove/recreate
+    this.updateSplineCurve();
+
+    // Update control polygon
+    const controlPoints = this.currentFunction.controlPoints;
+    const numPoints = controlPoints.length;
+    const controlPointData = controlPoints.map((y, i) => {
+      const x = -1 + (2 * i) / (numPoints - 1);
+      return { x, y, index: i };
+    });
+
+    this.updateControlPolygon(controlPointData);
+  }
+
+  /**
+   * Set callback for control point changes
+   */
+  setOnControlPointChange(callback: (index: number, newValue: number) => void): void {
+    this.onControlPointChange = callback;
+  }
+
+  /**
+   * Set callback for drag start
+   */
+  setOnDragStart(callback: () => void): void {
+    this.onDragStart = callback;
+  }
+
+  /**
+   * Set callback for drag end
+   */
+  setOnDragEnd(callback: () => void): void {
+    this.onDragEnd = callback;
   }
 
   /**
