@@ -614,7 +614,9 @@ export class SplineChart {
         .on("drag", (d: any) => {
           // Update y position based on drag
           const event: any = d3.event;
-          const newY = this.yScale.invert(event.y);
+          let newY = this.yScale.invert(event.y);
+          // Clamp the value between -10 and 10
+          newY = Math.max(-10, Math.min(10, newY));
           d.y = newY;
           
           // Update the control point in the function
@@ -753,7 +755,9 @@ export class SplineChart {
         })
         .on("drag", (d: any) => {
           const event: any = d3.event;
-          const newY = this.yScale.invert(event.y);
+          let newY = this.yScale.invert(event.y);
+          // Clamp the value between -10 and 10
+          newY = Math.max(-10, Math.min(10, newY));
           d.y = newY;
           
           if (this.currentFunction) {
