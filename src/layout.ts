@@ -597,18 +597,15 @@ export class NetworkLayoutManager {
         inputColumnActiveSpan = lastActiveIdx - firstActiveIdx + 1;
       }
     }
-    
-    // When input column is centered based on active span, the offset is:
-    const inputOffset = ((maxColumnCount - inputColumnActiveSpan) * (this.rectSize + this.spacing)) / 2;
-    
+
     // The bottom of the last input element (all inputs are drawn) will be at:
-    const inputColumnBottom = inputOffset + this.nodeIndexScale(numInputs);
+    const inputColumnBottom =  this.nodeIndexScale(numInputs);
     
     // Ensure SVG height accommodates the potentially extended input column
     maxYForEdges = maxYForEdges + padding;
     maxYForInputs = maxYForInputs + padding;
     maxYForLayers = maxYForLayers + padding;
-    const height = Math.max(maxYForEdges, maxYForInputs, maxYForLayers, inputColumnBottom, 400);
+    const height = Math.max(maxYForEdges, maxYForInputs, maxYForLayers, inputColumnBottom, 200);
     return height;
   }
 
