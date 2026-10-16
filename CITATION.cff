@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use KANLab, please cite the paper below."
+title: "KANLab"
+type: software
+authors:
+  - family-names: Niehaus
+    given-names: Lukas
+  - family-names: Rawiel
+    given-names: Robin
+  - family-names: Krumnack
+    given-names: Ulf
+url: "https://kanlab.app/"
+repository-code: "https://github.com/lniehaus/kanlab"
+preferred-citation:
+  type: article
+  title: "KANLab: TensorFlow Playground for Kolmogorov-Arnold Networks"
+  authors:
+    - family-names: Niehaus
+      given-names: Lukas
+    - family-names: Rawiel
+      given-names: Robin
+    - family-names: Krumnack
+      given-names: Ulf
+  year: 2026
+  journal: "arXiv preprint"
+  identifiers:
+    - type: other
+      value: "arXiv:2610.20117"
+  url: "https://arxiv.org/abs/2610.20117"

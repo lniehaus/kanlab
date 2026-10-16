@@ -6,6 +6,24 @@ Your feedback is highly appreciated!
 
 **If you'd like to contribute, be sure to review the [contribution guidelines](CONTRIBUTING.md).**
 
+## Citation
+
+KANLab is described in the following paper. If you use KANLab in your research or teaching, please cite:
+
+> Lukas Niehaus, Robin Rawiel, and Ulf Krumnack. *KANLab: TensorFlow Playground for Kolmogorov-Arnold Networks*. arXiv preprint arXiv:2610.20117, 2026. https://arxiv.org/abs/2610.20117
+
+```bibtex
+@misc{niehaus2026kanlab,
+  title         = {{KANLab}: {TensorFlow} Playground for {Kolmogorov-Arnold} Networks},
+  author        = {Niehaus, Lukas and Rawiel, Robin and Krumnack, Ulf},
+  year          = {2026},
+  eprint        = {2610.20117},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  url           = {https://arxiv.org/abs/2610.20117}
+}
+```
+
 ## Development
 
 To run the visualization locally, run:
