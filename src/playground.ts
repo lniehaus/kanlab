@@ -255,6 +255,8 @@ let layoutManager: NetworkLayoutManager = null;
 let hoverCardHideTimeout: number = null;
 // Track if user is currently dragging a control point
 let isDraggingControlPoint: boolean = false;
+// Tooltip showing the activation std that determines a link's thickness
+let linkTooltip = d3.select("body").append("div").attr("class", "link-tooltip");
 // Track cursor position during interactions
 let lastMousePosition: {x: number, y: number} = {x: 0, y: 0};
 // Debounce timer for updateWeightsUI to prevent excessive DOM manipulation
@@ -828,6 +830,7 @@ function drawNetwork(network: kan.KANNode[][]): void {
   let svg = d3.select("#svg");
   // Remove all svg elements.
   svg.select("g.core").remove();
+  linkTooltip.classed("visible", false);
   // Remove all div elements.
   d3.select("#network").selectAll("div.canvas").remove();
   d3.select("#network").selectAll("div.plus-minus-neurons").remove();
@@ -1270,16 +1273,36 @@ function drawLinkWithSplineChart(
     d: diagonal(datum2, 0)
   });
 
-  // Add invisible thick links for hover detection (without hover card functionality)
+  // Add invisible thick links for hover detection, showing a tooltip with the
+  // activation std that determines the link's thickness
   container.append("path")
     .attr("d", diagonal(datum1, 0))
-    .attr("class", "link-hover");
+    .attr("class", "link-hover")
+    .call(addLinkTooltip, "Input", () => edge.getInputActivationStd());
 
   container.append("path")
     .attr("d", diagonal(datum2, 0))
-    .attr("class", "link-hover");
+    .attr("class", "link-hover")
+    .call(addLinkTooltip, "Output", () => edge.getOutputActivationStd());
 
   return [line1, line2];
+}
+
+/**
+ * Shows the link tooltip while hovering the given path. The value is read on
+ * every mouse move so it stays current while the network is training.
+ */
+function addLinkTooltip(path, label: string, getStd: () => number) {
+  path.on("mousemove", () => {
+    const event = d3.event as MouseEvent;
+    linkTooltip
+      .html(`<span class="link-tooltip-label">${label} activation std</span>` +
+          `<span class="link-tooltip-value">${getStd().toFixed(2)}</span>`)
+      .style({left: `${event.pageX}px`, top: `${event.pageY}px`})
+      .classed("visible", true);
+  }).on("mouseleave", () => {
+    linkTooltip.classed("visible", false);
+  });
 }
 
 /**

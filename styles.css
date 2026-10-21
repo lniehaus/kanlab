@@ -822,6 +822,65 @@ g.column rect {
   opacity: 0;
 }
 
+/* Tooltip showing the activation std that determines a link's thickness.
+   Styled as a small version of the spline #hovercard. */
+.link-tooltip {
+  position: absolute;
+  z-index: 1100;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, calc(-100% - 14px));
+  transition: opacity 0.15s ease;
+  white-space: nowrap;
+  background: #fff;
+  border: 1px solid #aaa;
+  border-radius: 5px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  color: #333;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.3;
+  padding: 7px 10px;
+}
+
+.link-tooltip-label {
+  color: #777;
+}
+
+.link-tooltip-value {
+  margin-left: 8px;
+  font-weight: 500;
+  /* Keep the width stable while the value changes during training */
+  font-variant-numeric: tabular-nums;
+}
+
+/* Arrow: a grey triangle for the border with a white one on top */
+.link-tooltip::before,
+.link-tooltip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  border-style: solid;
+  border-color: transparent;
+}
+
+.link-tooltip::before {
+  top: 100%;
+  border-width: 7px 7px 0 7px;
+  border-top-color: #aaa;
+}
+
+.link-tooltip::after {
+  top: calc(100% - 1px);
+  border-width: 7px 7px 0 7px;
+  border-top-color: #fff;
+}
+
+.link-tooltip.visible {
+  opacity: 1;
+}
+
 #network .canvas canvas {
   position: absolute;
   top: -2px;
