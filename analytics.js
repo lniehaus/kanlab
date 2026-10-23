@@ -1,5 +1,9 @@
 (function () {
-var MEASUREMENT_ID = 'Add your own analytics ID here'; // e.g., 'G-XXXXXXXXXX'
+// Replaced at build time with GA_MEASUREMENT_ID from .env (see scripts/build-analytics.js)
+var MEASUREMENT_ID = '__GA_MEASUREMENT_ID__'; // e.g., 'G-XXXXXXXXXX'
+
+// Analytics is disabled when no measurement ID was configured
+if (!/^G-[A-Z0-9]+$/.test(MEASUREMENT_ID)) return;
 
 // Prevent double-initialization
 if (window.__gaInitialized) return;

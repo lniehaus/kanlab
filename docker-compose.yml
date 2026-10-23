@@ -1,0 +1,29 @@
+services:
+  kanlab:
+    build:
+      context: .
+      args:
+        - GA_MEASUREMENT_ID=${GA_MEASUREMENT_ID:-}
+    image: kanlab
+    # No published ports: the site is only reachable through the Cloudflare Tunnel.
+    # For local testing without the tunnel, temporarily add: ports: ["127.0.0.1:8080:80"]
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --url http://kanlab:80 run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:?set TUNNEL_TOKEN in .env}
+    depends_on:
+      - kanlab
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
