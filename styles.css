@@ -238,6 +238,8 @@ header h1 .optional {
   padding: 18px 0;
   box-shadow: 0 1px 4px rgba(0,0,0,0.08);
   background: white;
+  /* Hidden tooltips must never widen the page (white strip on mobile) */
+  overflow-x: clip;
 }
 
 @media (min-height: 700px) {
@@ -299,6 +301,13 @@ header h1 .optional {
   margin-top: 6px;
 }
 
+/* Fit all controls into the 944px .l--page */
+@media (max-width: 1179px) {
+  #top-controls .control {
+    margin-left: 20px;
+  }
+}
+
 #top-controls [data-tooltip] {
   position: relative;
   overflow: visible;
@@ -346,6 +355,17 @@ header h1 .optional {
 
 #top-controls [data-tooltip]:hover {
   z-index: 1101;
+}
+
+/* Right-align the rightmost tooltip so it stays inside the page */
+#top-controls .control:last-child[data-tooltip]::after {
+  left: auto;
+  right: 0;
+  transform: translate(0, -6px);
+}
+
+#top-controls .control:last-child[data-tooltip]:hover::after {
+  transform: translate(0, -10px);
 }
 
 #top-controls .control .label,

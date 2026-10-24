@@ -81,13 +81,15 @@ export class HeatMap {
                      .domain([-1, 1])
                      .range(colors);
 
+    // Shift left with a margin rather than `left`, so the floated parent
+    // shrinks with it instead of reserving the full width past the column.
     container = container.append("div")
       .style({
         width: `${width}px`,
         height: `${height}px`,
         position: "relative",
         top: `-${padding}px`,
-        left: `-${padding}px`
+        "margin-left": `-${padding}px`
       });
     this.canvas = container.append("canvas")
       .attr("width", numSamples)
