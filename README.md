@@ -1,5 +1,7 @@
 # KANLab
 
+**Try it live at [kanlab.app](https://kanlab.app)**
+
 An interactive visualization of Kolmogorov-Arnold Networks (KANs), based on Deep Playground,
 written in TypeScript using d3.js. We use GitHub issues for tracking new requests and bugs.
 Your feedback is highly appreciated!
