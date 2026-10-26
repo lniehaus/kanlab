@@ -53,7 +53,4 @@ To run it locally without the tunnel:
 - `docker build -t kanlab .` (add `--build-arg GA_MEASUREMENT_ID=G-...` for analytics)
 - `docker run --rm -p 8080:80 kanlab` and open http://localhost:8080
 
-## For owners
-To push to production: `git subtree push --prefix dist origin gh-pages`.
-
 This is not an official Google product.
