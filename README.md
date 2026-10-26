@@ -6,7 +6,7 @@ An interactive visualization of Kolmogorov-Arnold Networks (KANs), based on Deep
 written in TypeScript using d3.js. We use GitHub issues for tracking new requests and bugs.
 Your feedback is highly appreciated!
 
-![KANLab main view](assets/kanlab-main-view.png)
+[![KANLab demo](assets/kanlab-cover.gif)](https://kanlab.app)
 
 **If you'd like to contribute, be sure to review the [contribution guidelines](CONTRIBUTING.md).**
 
