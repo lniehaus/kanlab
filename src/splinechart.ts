@@ -85,7 +85,7 @@ export class SplineChart {
   private isDragging: boolean = false;
   private targetYDomain: [number, number] | null = null;
   private smoothingTimer: any = null;
-  private outputHistogramRange: [number, number] = [-1, 1]; // Actual range where output data is collected
+  private inputHistogramData: number[] | null = null; // Normalized input histogram, used to derive the output histogram
 
   constructor(container: any, userSettings?: SplineChartSettings) {
     if (userSettings != null) {
@@ -388,13 +388,9 @@ export class SplineChart {
    * Update the chart with a new learnable function
    * Uses D3's enter/update/exit pattern to preserve DOM elements and event handlers
    */
-  updateFunction(learnableFunction: LearnableFunction, inputHistogramData?: number[], outputHistogramData?: number[], outputHistogramRange?: [number, number], animated: boolean = true): void {
+  updateFunction(learnableFunction: LearnableFunction, inputHistogramData?: number[], animated: boolean = true): void {
     this.currentFunction = learnableFunction;
-    
-    // Store output histogram range if provided
-    if (outputHistogramRange) {
-      this.outputHistogramRange = outputHistogramRange;
-    }
+    this.inputHistogramData = inputHistogramData && inputHistogramData.length > 0 ? inputHistogramData : null;
     
     // Update Y scale based on function range
     this.updateYScale(animated);
@@ -404,19 +400,15 @@ export class SplineChart {
     
     // Update histograms FIRST (so they're behind the curve)
     if (this.settings.showActivationHistogram) {
-      if (inputHistogramData && inputHistogramData.length > 0) {
-        this.updateActivationHistogram(inputHistogramData);
+      if (this.inputHistogramData) {
+        this.updateActivationHistogram(this.inputHistogramData);
       } else {
         // Remove histograms if no data
         this.svg.selectAll(".activation-histogram").remove();
       }
-      
-      if (outputHistogramData && outputHistogramData.length > 0) {
-        this.updateOutputHistogram(outputHistogramData);
-      } else {
-        // Remove output histograms if no data
-        this.svg.selectAll(".output-histogram").remove();
-      }
+
+      // Output histogram is derived from the input histogram and the current spline
+      this.updateOutputHistogram();
     } else {
       // Remove histograms if not enabled
       this.svg.selectAll(".activation-histogram").remove();
@@ -1105,86 +1097,67 @@ export class SplineChart {
   }
 
   /**
-   * Update output histogram using D3 data binding with adaptive bar density
-   * Scales histogram to cover entire y-axis, filling gaps with zeros
+   * Update output histogram by pushing the input histogram through the current spline.
+   * Bins are laid out on the current y-axis domain, so each bar lines up with the
+   * spline values that the incoming activations actually hit.
    */
-  private updateOutputHistogram(histogramData: number[]): void {
-    if (!histogramData || histogramData.length === 0) {
+  private updateOutputHistogram(): void {
+    const inputData = this.inputHistogramData;
+    if (!this.currentFunction || !inputData || inputData.length === 0) {
       this.svg.selectAll(".output-histogram").remove();
       return;
     }
-    
-    const numBins = histogramData.length;
+
+    const numBins = inputData.length;
     const histogramWidth = this.settings.histogramSize || 50;
     const histogramGap = this.settings.histogramGap || 10;
-    
-    // Use actual output histogram range (where data was collected)
-    const [dataMin, dataMax] = this.outputHistogramRange;
-    const dataBinHeight = (dataMax - dataMin) / numBins;
-    
-    // Get current yScale domain (entire visible y-axis range)
-    const yDomain = this.yScale.domain();
-    const [yMin, yMax] = yDomain;
-    const totalRange = yMax - yMin;
-    
-    // Create expanded histogram covering entire y-axis
-    // Use same number of bins as original for consistency
-    const expandedBinHeight = totalRange / numBins;
-    const expandedHistogram: number[] = [];
+
+    // Output bins tile the current y-axis domain
+    const [yMin, yMax] = this.yScale.domain();
+    const outputBinHeight = (yMax - yMin) / numBins;
+    const outputHistogram: number[] = [];
     for (let i = 0; i < numBins; i++) {
-      expandedHistogram.push(0);
+      outputHistogram.push(0);
     }
-    
-    // Map original histogram data into expanded bins using interpolation
+
+    // Input bins cover [-6, 6] (matching xScale domain). Sample each input bin
+    // and send its mass to the output bin of the spline value at each sample.
+    const inputBinWidth = 12 / numBins;
+    const samplesPerBin = 10;
     for (let i = 0; i < numBins; i++) {
-      const dataBinCenter = dataMin + (i + 0.5) * dataBinHeight;
-      
-      // Check if this data bin falls within the visible range
-      if (dataBinCenter >= yMin && dataBinCenter <= yMax) {
-        // Calculate exact position in expanded bins (floating point)
-        const exactPosition = (dataBinCenter - yMin) / expandedBinHeight;
-        
-        // Get adjacent bin indices
-        const lowerIdx = Math.floor(exactPosition);
-        const upperIdx = Math.ceil(exactPosition);
-        
-        // Calculate interpolation weight
-        const weight = exactPosition - lowerIdx;
-        
-        // Distribute value across adjacent bins using linear interpolation
-        if (lowerIdx >= 0 && lowerIdx < numBins) {
-          expandedHistogram[lowerIdx] += histogramData[i] * (1 - weight);
-        }
-        if (upperIdx >= 0 && upperIdx < numBins && upperIdx !== lowerIdx) {
-          expandedHistogram[upperIdx] += histogramData[i] * weight;
+      if (inputData[i] === 0) continue;
+      for (let s = 0; s < samplesPerBin; s++) {
+        const x = -6 + (i + (s + 0.5) / samplesPerBin) * inputBinWidth;
+        const y = this.currentFunction.evaluate(x);
+        const idx = Math.floor((y - yMin) / outputBinHeight);
+        if (idx >= 0 && idx < numBins) {
+          outputHistogram[idx] += inputData[i] / samplesPerBin;
         }
       }
     }
-    
-    // Calculate fixed bar height (matching input histogram bar width)
-    const inputBinWidth = 12 / numBins; // xScale domain is always [-6, 6] = 12 units
-    const fixedBarHeight = this.xScale(inputBinWidth) - this.xScale(0);
-    
-    // Create display data from all bins
+
+    const maxValue = Math.max(...outputHistogram);
     const displayData: Array<{index: number, value: number}> = [];
     for (let i = 0; i < numBins; i++) {
-      displayData.push({ index: i, value: expandedHistogram[i] });
+      displayData.push({ index: i, value: maxValue > 0 ? outputHistogram[i] / maxValue : 0 });
     }
-    
+
+    const barHeight = this.yScale(yMin) - this.yScale(yMin + outputBinHeight);
+
     // Use D3 data binding for histogram group
     let histogramGroup = this.svg.selectAll(".output-histogram")
       .data([displayData]); // Single histogram group
-    
+
     // ENTER: Create histogram group if it doesn't exist
     histogramGroup.enter()
       .append("g")
       .attr("class", "output-histogram")
       .attr("transform", `translate(${this.width + histogramGap}, 0)`);
-    
+
     // Update bars using data binding
     const bars = histogramGroup.selectAll("rect.output-histogram-bar")
       .data((d: any[]) => d, (d: any) => d.index); // Key function for proper binding
-    
+
     // ENTER: Create new bars
     bars.enter()
       .append("rect")
@@ -1193,18 +1166,13 @@ export class SplineChart {
       .style("fill", this.settings.outputHistogramColor || "#E24A90")
       .style("opacity", this.settings.histogramOpacity || 0.3)
       .style("pointer-events", "none");
-    
-    // UPDATE: Transition bars to new values
-    bars.transition()
-      .duration(50)
-      .attr("y", (d: any) => {
-        // Position bar at the CENTER of its bin range, offset by half the bar height
-        const binCenter = yMin + (d.index + 0.5) * expandedBinHeight;
-        return this.yScale(binCenter) - fixedBarHeight / 2;
-      })
+
+    // UPDATE: Bars are positioned without transition so they stay in sync with the y-axis
+    bars
+      .attr("y", (d: any) => this.yScale(yMin + (d.index + 1) * outputBinHeight))
       .attr("width", (d: any) => d.value * histogramWidth)
-      .attr("height", fixedBarHeight - 1);
-    
+      .attr("height", Math.max(0, barHeight - 1));
+
     // EXIT: Remove extra bars
     bars.exit().remove();
   }
@@ -1298,6 +1266,11 @@ export class SplineChart {
           .style("stroke", "none");
       }
     }
+
+    // Keep output histogram bins aligned with the interpolated y-axis
+    if (this.settings.showActivationHistogram) {
+      this.updateOutputHistogram();
+    }
   }
 
   /**
@@ -1311,6 +1284,11 @@ export class SplineChart {
 
     // Use update methods instead of remove/recreate
     this.updateSplineCurve();
+
+    // Spline values changed, so the activations now hit different y positions
+    if (this.settings.showActivationHistogram) {
+      this.updateOutputHistogram();
+    }
 
     // Update control polygon
     const controlPoints = this.currentFunction.controlPoints;

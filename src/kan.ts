@@ -432,18 +432,13 @@ export class KANEdge {
 
   // Histogram tracking for activation visualization
   activationHistogram: number[] = [];
-  outputHistogram: number[] = [];
   histogramBins: number = 20;
   histogramRange: [number, number] = [-6, 6];
-  outputHistogramRange: [number, number] = [-1, 1];
   histogramDecayFactor: number = 0.995; // Decay old counts: 0.99 = faster decay, 0.999 = slower decay
-  outputHistogramDecayFactor: number = 0.95; // Faster decay for outputs to respond quickly to control point changes
 
   // Track observed ranges for adaptive histograms
   private observedInputMin: number = Infinity;
   private observedInputMax: number = -Infinity;
-  private observedOutputMin: number = Infinity;
-  private observedOutputMax: number = -Infinity;
   private useAdaptiveRanges: boolean = false;
 
   constructor(
@@ -484,11 +479,7 @@ export class KANEdge {
     if (recordHistogram) {
       this.recordActivation(input);
     }
-    const output = this.learnableFunction.evaluate(input);
-    if (recordHistogram) {
-      this.recordOutput(output);
-    }
-    return output;
+    return this.learnableFunction.evaluate(input);
   }
 
   /** Record activation for histogram visualization */
@@ -512,37 +503,10 @@ export class KANEdge {
     this.activationHistogram[clampedIndex]++;
   }
 
-  /** Record output for histogram visualization */
-  recordOutput(output: number): void {
-    // Apply faster decay to output bins to quickly respond to control point changes
-    for (let i = 0; i < this.histogramBins; i++) {
-      this.outputHistogram[i] *= this.outputHistogramDecayFactor;
-    }
-
-    // Track observed range for adaptive histograms
-    this.observedOutputMin = Math.min(this.observedOutputMin, output);
-    this.observedOutputMax = Math.max(this.observedOutputMax, output);
-
-    // Find bin index (no clipping - values outside range go to edge bins)
-    const [min, max] = this.outputHistogramRange;
-    const binWidth = (max - min) / this.histogramBins;
-    const binIndex = Math.floor((output - min) / binWidth);
-    const clampedIndex = Math.max(0, Math.min(this.histogramBins - 1, binIndex));
-
-    // Increment count
-    this.outputHistogram[clampedIndex]++;
-  }
-
   /** Get normalized histogram for visualization */
   getNormalizedHistogram(): number[] {
     const maxCount = Math.max(...this.activationHistogram, 1);
     return this.activationHistogram.map(count => count / maxCount);
-  }
-
-  /** Get normalized output histogram for visualization */
-  getNormalizedOutputHistogram(): number[] {
-    const maxCount = Math.max(...this.outputHistogram, 1);
-    return this.outputHistogram.map(count => count / maxCount);
   }
 
   /** Helper method to calculate standard deviation from histogram data */
@@ -578,19 +542,41 @@ export class KANEdge {
     return this.calculateStdFromHistogram(this.activationHistogram, this.histogramRange);
   }
 
-  /** Calculate standard deviation of output activations from histogram */
+  /**
+   * Calculate standard deviation of output activations by pushing the input
+   * histogram through the current spline, so it always reflects the current function
+   */
   getOutputActivationStd(): number {
-    return this.calculateStdFromHistogram(this.outputHistogram, this.outputHistogramRange);
+    const totalCount = this.activationHistogram.reduce((sum, count) => sum + count, 0);
+    if (totalCount === 0) return 0;
+
+    const [min, max] = this.histogramRange;
+    const binWidth = (max - min) / this.histogramBins;
+    const samplesPerBin = 10;
+
+    // Accumulate weighted sums of f(x) and f(x)^2 over samples within each input bin
+    let sum = 0;
+    let sumSq = 0;
+    for (let i = 0; i < this.histogramBins; i++) {
+      const count = this.activationHistogram[i];
+      if (count === 0) continue;
+      const weight = count / samplesPerBin;
+      for (let s = 0; s < samplesPerBin; s++) {
+        const x = min + (i + (s + 0.5) / samplesPerBin) * binWidth;
+        const y = this.learnableFunction.evaluate(x);
+        sum += weight * y;
+        sumSq += weight * y * y;
+      }
+    }
+
+    const mean = sum / totalCount;
+    const variance = Math.max(0, sumSq / totalCount - mean * mean);
+    return Math.sqrt(variance);
   }
 
   /** Get observed input activation range */
   getObservedInputRange(): [number, number] {
     return [this.observedInputMin, this.observedInputMax];
-  }
-
-  /** Get observed output activation range */
-  getObservedOutputRange(): [number, number] {
-    return [this.observedOutputMin, this.observedOutputMax];
   }
 
   /** Enable adaptive histogram ranges based on observed values */
@@ -603,49 +589,18 @@ export class KANEdge {
         this.observedInputMax + inputPadding
       ];
     }
-    if (this.observedOutputMin < Infinity && this.observedOutputMax > -Infinity) {
-      const outputPadding = (this.observedOutputMax - this.observedOutputMin) * 0.1;
-      this.outputHistogramRange = [
-        this.observedOutputMin - outputPadding,
-        this.observedOutputMax + outputPadding
-      ];
-    }
-  }
-
-  /** Update output histogram range based on current spline output range */
-  updateOutputHistogramRange(): void {
-    if (!this.learnableFunction) return;
-
-    // Sample the spline to find its actual output range
-    let minOutput = Infinity;
-    let maxOutput = -Infinity;
-
-    for (let i = 0; i <= 100; i++) {
-      const x = -6 + (12 * i) / 100;
-      const y = this.learnableFunction.evaluate(x);
-      minOutput = Math.min(minOutput, y);
-      maxOutput = Math.max(maxOutput, y);
-    }
-
-    // Add padding
-    const padding = Math.max(0.5, (maxOutput - minOutput) * 0.2);
-    this.outputHistogramRange = [minOutput - padding, maxOutput + padding];
   }
 
   /** Reset histogram */
   resetHistogram(): void {
     this.activationHistogram = [];
-    this.outputHistogram = [];
     for (let i = 0; i < this.histogramBins; i++) {
       this.activationHistogram.push(0);
-      this.outputHistogram.push(0);
     }
 
     // Reset observed ranges
     this.observedInputMin = Infinity;
     this.observedInputMax = -Infinity;
-    this.observedOutputMin = Infinity;
-    this.observedOutputMax = -Infinity;
   }
 
   /** Accumulate gradients for parameter updates */

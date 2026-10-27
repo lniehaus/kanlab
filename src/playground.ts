@@ -586,8 +586,7 @@ function updateWeightsUI(network: kan.KANNode[][], container, forceUpdate: boole
         if (currentHoverCardEdge && hoverCardSplineChart && 
             currentHoverCardEdge === edge) {
           const inputHistogramData = edge.getNormalizedHistogram();
-          const outputHistogramData = edge.getNormalizedOutputHistogram();
-          hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData, edge.outputHistogramRange);
+          hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData);
         }
       }
     }
@@ -1107,8 +1106,7 @@ function drawLinkWithSplineChart(
     // Update hover card if it's showing this edge
     if (currentHoverCardEdge === edge && hoverCardSplineChart) {
       const inputHistogramData = edge.getNormalizedHistogram();
-      const outputHistogramData = edge.getNormalizedOutputHistogram();
-      hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData, edge.outputHistogramRange);
+      hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData);
     }
   };
 
@@ -1784,9 +1782,6 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
     
     // Set callback to update the main network visualization when control points change
     hoverCardSplineChart.setOnControlPointChange((index: number, newValue: number) => {
-      // Update output histogram range to match new spline range
-      edge.updateOutputHistogramRange();
-      
       // Clear the histogram since the spline function has changed
       edge.resetHistogram();
       
@@ -1804,8 +1799,7 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
       
       // Update the hovercard's histogram display with fresh activation data
       const inputHistogramData = edge.getNormalizedHistogram();
-      const outputHistogramData = edge.getNormalizedOutputHistogram();
-      hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData, edge.outputHistogramRange);
+      hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData);
       
       // Update link colors/widths for this specific edge using absolute std values
       const inputStdBoundary = 0.6;  // Typical std for inputs in [-1, 1] range
@@ -1853,8 +1847,7 @@ function updateHoverCard(type: HoverType, nodeOrEdge?: kan.KANNode | kan.KANEdge
     
     // Update with the learnable function and histogram data
     const inputHistogramData = edge.getNormalizedHistogram();
-    const outputHistogramData = edge.getNormalizedOutputHistogram();
-    hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, outputHistogramData, edge.outputHistogramRange, false);
+    hoverCardSplineChart.updateFunction(edge.learnableFunction, inputHistogramData, false);
     currentHoverCardEdge = edge;
     
     // Now that chart is fully configured with correct y-scale, make hovercard visible
